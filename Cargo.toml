@@ -1,0 +1,17 @@
+[package]
+name = "raytrace-voxels"
+version = "0.1.0"
+edition = "2018"
+resolver = "2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytemuck = "1.7.2"
+glam = "0.17.3"
+image = "0.23.14"
+pollster = "0.2.4"
+rand = "0.8.4"
+rayon = "1.5.1"
+wgpu = "0.10.1"
+winit = "0.25.0"
