@@ -21,7 +21,7 @@ impl SoftwareRaytracer {
         let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
-                width: gpu.size.width,
+                width: gpu.size.width / 2,
                 height: gpu.size.height,
                 depth_or_array_layers: 1,
             },
@@ -119,7 +119,7 @@ impl SoftwareRaytracer {
             self.tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
                 size: wgpu::Extent3d {
-                    width: gpu.size.width,
+                    width: gpu.size.width / 2,
                     height: gpu.size.height,
                     depth_or_array_layers: 1,
                 },
@@ -144,7 +144,7 @@ impl SoftwareRaytracer {
 
         let looking = glam::Mat3A::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
     
-        let halfwidth = self.size.width as f32 / 2.0;
+        let halfwidth = (self.size.width / 2) as f32 / 2.0;
         let halfheight = self.size.height as f32 / 2.0;
         let sun = Vec3::new(0.1, 1.0, 0.2);
 
@@ -153,7 +153,7 @@ impl SoftwareRaytracer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         let mut raycast_image =
-            image::ImageBuffer::<Rgba<u8>, Vec<u8>>::new(self.size.width, self.size.height);
+            image::ImageBuffer::<Rgba<u8>, Vec<u8>>::new(self.size.width / 2, self.size.height);
         raycast_image
             .enumerate_rows_mut()
             .par_bridge()
@@ -188,11 +188,11 @@ impl SoftwareRaytracer {
             raycast_image.as_bytes(),
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: NonZeroU32::new(4 * self.size.width),
+                bytes_per_row: NonZeroU32::new(4 * (self.size.width / 2)),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
-                width: self.size.width,
+                width: self.size.width / 2,
                 height: self.size.height,
                 depth_or_array_layers: 1,
             },
