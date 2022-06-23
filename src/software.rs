@@ -126,7 +126,7 @@ impl SoftwareRaytracer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
             });
             self.tex_view = self
@@ -146,7 +146,7 @@ impl SoftwareRaytracer {
     
         let halfwidth = (self.size.width / 2) as f32 / 2.0;
         let halfheight = self.size.height as f32 / 2.0;
-        let sun = Vec3::new(0.1, 1.0, 0.2);
+        let sun = Vec3::new(0.1, 1.0, 0.2).normalize();
 
         let mut encoder = gpu
             .device

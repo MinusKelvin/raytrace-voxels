@@ -164,6 +164,8 @@ impl FragmentRaytracer {
             ],
             pos: camera.extend(0.0),
             size: space.size.extend(0),
+            sun: Vec3::new(0.1, 1.0, 0.2).normalize(),
+            aspect: (gpu.size.width / 2) as f32 / gpu.size.height as f32,
         };
         gpu.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -198,4 +200,6 @@ struct Uniforms {
     looking: [Vec4; 3],
     pos: Vec4,
     size: IVec4,
+    sun: Vec3,
+    aspect: f32,
 }

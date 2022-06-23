@@ -25,6 +25,8 @@ struct Uniforms {
     looking: mat3x3<f32>;
     pos: vec3<f32>;
     size: vec3<i32>;
+    sun: vec3<f32>;
+    aspect: f32;
 };
 
 struct Space {
@@ -50,16 +52,20 @@ fn vertex_main(
 struct RaycastResult {
     hit: bool;
     color: vec4<f32>;
+    distance: f32;
+    normal: vec3<f32>;
 };
 
 fn raycast(from: vec3<f32>, d: vec3<f32>) -> RaycastResult {
     var result: RaycastResult;
     result.hit = false;
     result.color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    result.distance = 0.0;
+    result.normal = vec3<f32>(0.0, 0.0, 0.0);
 
-    var step_f = sign(d);
-    var t_delta = step_f / d;
-    var fudge = (1.0 + step_f) / 2.0;
+    let step_f = sign(d);
+    let t_delta = step_f / d;
+    let fudge = (1.0 + step_f) / 2.0;
     var t_max = t_delta * (fudge - fract(from) * step_f);
     if (t_max.x != t_max.x) {
         t_max.x = 1.0 / 0.0;
@@ -71,9 +77,9 @@ fn raycast(from: vec3<f32>, d: vec3<f32>) -> RaycastResult {
         t_max.z = 1.0 / 0.0;
     }
     var p = vec3<i32>(floor(from));
-    var step = vec3<i32>(step_f);
+    let step = vec3<i32>(step_f);
     for (var i = 0; i < 100; i = i + 1) {
-        var t = min(t_max.x, min(t_max.y, t_max.z));
+        let t = min(t_max.x, min(t_max.y, t_max.z));
         var f = vec3<f32>(0.0, 0.0, 0.0);
         if (t_max.x < t_max.y) {
             if (t_max.x < t_max.z) {
@@ -104,6 +110,8 @@ fn raycast(from: vec3<f32>, d: vec3<f32>) -> RaycastResult {
             if (color.a >= 0.5) {
                 result.hit = true;
                 result.color = color;
+                result.distance = t;
+                result.normal = f;
                 break;
             }
         } else {
@@ -115,9 +123,37 @@ fn raycast(from: vec3<f32>, d: vec3<f32>) -> RaycastResult {
     return result;
 }
 
+fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
+    var color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    var pos = from;
+    var dir = d;
+    var multiplier = 1.0;
+    for (var depth = 0; depth < 4; depth = depth + 1) {
+        let ray = raycast(pos, dir);
+        if (ray.hit) {
+            let p = pos + dir * ray.distance;
+            var lighting = max(0.0, dot(uniforms.sun, -ray.normal));
+            let shadowcast = raycast(p - ray.normal * 0.001, uniforms.sun);
+            lighting = min(lighting, f32(!shadowcast.hit));
+            color = color + ray.color * (lighting / 2.0 + 0.5) * multiplier;
+
+            if (all(ray.color == vec4<f32>(1.0, 1.0, 1.0, 1.0))) {
+                multiplier = multiplier / 2.0;
+                color = color * (1.0 - multiplier);
+                pos = p - ray.normal * 0.001;
+                dir = reflect(dir, ray.normal);
+                continue;
+            }
+        }
+        break;
+    }
+    return color;
+}
+
 [[stage(fragment)]]
 fn fragment_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {
-    var d: vec3<f32> = uniforms.looking * normalize(vec3<f32>(in.p.xy, 1.0));
-    var result = raycast(uniforms.pos, d);
-    return result.color;
+    let d = uniforms.looking * normalize(
+        vec3<f32>(in.p.x * uniforms.aspect, in.p.y, 1.0)
+    );
+    return raytrace(uniforms.pos, d);
 }
