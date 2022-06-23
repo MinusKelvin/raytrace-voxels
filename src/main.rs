@@ -5,6 +5,7 @@ use winit::event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{Window, WindowBuilder};
 
+mod fragment;
 mod software;
 
 fn main() {
@@ -37,6 +38,7 @@ fn main() {
     let mut gpu = pollster::block_on(WgpuState::new(&window));
 
     let mut software = software::SoftwareRaytracer::new(&gpu);
+    let mut fragment = fragment::FragmentRaytracer::new(&gpu, &space);
 
     let mut last_time = std::time::Instant::now();
 
@@ -93,14 +95,17 @@ fn main() {
 
             match gpu.surface.get_current_texture() {
                 Ok(frame) => {
-                    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    let view = frame
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
 
-                    let cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
+                    let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
+                    let fg_cmd = fragment.render(&gpu, &view, &space, camera, yaw, pitch);
 
-                    gpu.queue.submit([cmd]);
+                    gpu.queue.submit([sw_cmd, fg_cmd]);
 
                     frame.present();
-                },
+                }
                 Err(wgpu::SurfaceError::Lost) => gpu.resize(gpu.size),
                 Err(wgpu::SurfaceError::OutOfMemory) => *cf = ControlFlow::Exit,
                 Err(_) => {}

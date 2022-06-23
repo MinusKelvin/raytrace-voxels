@@ -7,8 +7,8 @@ resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bytemuck = "1.9.1"
-glam = "0.20.5"
+bytemuck = { version = "1.9.1", features = ["derive"] }
+glam = { version = "0.21.1", features = ["bytemuck"] }
 image = "0.24.2"
 pollster = "0.2.5"
 rand = "0.8.5"
