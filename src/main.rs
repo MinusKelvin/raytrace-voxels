@@ -37,7 +37,7 @@ fn main() {
 
     let mut gpu = pollster::block_on(WgpuState::new(&window));
 
-    let mut software = software::SoftwareRaytracer::new(&gpu);
+    // let mut software = software::SoftwareRaytracer::new(&gpu);
     let mut fragment = fragment::FragmentRaytracer::new(&gpu, &space);
 
     let mut last_time = std::time::Instant::now();
@@ -70,7 +70,7 @@ fn main() {
             let now = std::time::Instant::now();
             let delta = (now - last_time).as_secs_f32();
             window.set_title(&format!(
-                "cpu voxel raytrace: {:.2?} frametime",
+                "gpu voxel raytrace: {:.2?} frametime",
                 now - last_time
             ));
             last_time = now;
@@ -99,10 +99,10 @@ fn main() {
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
 
-                    let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
+                    // let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
                     let fg_cmd = fragment.render(&gpu, &view, &space, camera, yaw, pitch);
 
-                    gpu.queue.submit([sw_cmd, fg_cmd]);
+                    gpu.queue.submit([/*sw_cmd,*/ fg_cmd]);
 
                     frame.present();
                 }
@@ -164,7 +164,7 @@ impl WgpuState {
             format: surface.get_preferred_format(&adapter).unwrap(),
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: wgpu::PresentMode::Mailbox,
         };
         surface.configure(&device, &config);
 
