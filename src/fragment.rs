@@ -1,7 +1,8 @@
 use std::num::NonZeroU64;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{EulerRot, IVec4, Mat3, Vec3, Vec4};
+use glam::{EulerRot, IVec3, Mat3, Vec2, Vec3, Vec4};
+use rand::prelude::*;
 use wgpu::util::DeviceExt;
 
 use crate::{Space, WgpuState};
@@ -11,6 +12,8 @@ pub struct FragmentRaytracer {
     uniform_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
     space_group: wgpu::BindGroup,
+
+    pattern: [Vec4; 32],
 }
 
 impl FragmentRaytracer {
@@ -138,6 +141,16 @@ impl FragmentRaytracer {
             uniform_group,
             uniform_buffer,
             space_group,
+
+            pattern: [(); 32].map(|_| {
+                Vec3::new(
+                    thread_rng().gen::<f32>() - 0.5,
+                    thread_rng().gen::<f32>() - 0.5,
+                    thread_rng().gen::<f32>() - 0.5,
+                )
+                .normalize()
+                .extend(0.0)
+            })
         }
     }
 
@@ -162,10 +175,15 @@ impl FragmentRaytracer {
                 looking.y_axis.extend(0.0),
                 looking.z_axis.extend(0.0),
             ],
-            pos: camera.extend(0.0),
-            size: space.size.extend(0),
+            pos: camera,
+            size: space.size,
             sun: Vec3::new(0.1, 1.0, 0.2).normalize(),
-            aspect: gpu.size.width as f32 / gpu.size.height as f32,
+            vp_size: Vec2::new(gpu.size.width as f32, gpu.size.height as f32),
+            _padding0: 0,
+            _padding1: 0,
+            _padding2: 0,
+            _padding3: [0; 2],
+            orientations: self.pattern,
         };
         gpu.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -198,8 +216,13 @@ impl FragmentRaytracer {
 #[repr(C)]
 struct Uniforms {
     looking: [Vec4; 3],
-    pos: Vec4,
-    size: IVec4,
+    pos: Vec3,
+    _padding0: u32,
+    size: IVec3,
+    _padding1: u32,
     sun: Vec3,
-    aspect: f32,
+    _padding2: u32,
+    vp_size: Vec2,
+    _padding3: [u32; 2],
+    orientations: [Vec4; 32],
 }

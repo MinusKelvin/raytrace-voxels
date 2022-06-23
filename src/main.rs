@@ -9,13 +9,14 @@ mod fragment;
 mod software;
 
 fn main() {
-    let mut space = Space::new(IVec3::splat(32));
-    for x in 0..32 {
-        for y in 0..32 {
-            for z in 0..32 {
-                if y == 0 {
-                    space.set(IVec3::new(x, y, z), Some([1.0; 3]));
-                } else if thread_rng().gen_bool(0.01) {
+    let mut space = Space::new(IVec3::splat(128));
+    for x in 0..128 {
+        for z in 0..128 {
+            let h = ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 64;
+            for y in 0..128 {
+                if y < h {
+                    space.set(IVec3::new(x, y, z), Some([0.9; 3]));
+                } else if thread_rng().gen_bool(0.001) {
                     space.set(IVec3::new(x, y, z), Some(thread_rng().gen()));
                 }
             }
@@ -23,7 +24,7 @@ fn main() {
     }
     let mut yaw = 0.0f32;
     let mut pitch = 0.0;
-    let mut camera = Vec3::new(16.0, 16.0, 16.0);
+    let mut camera = Vec3::new(64.0, 96.0, 64.0);
     let mut grabbed = false;
     let mut left = false;
     let mut right = false;
