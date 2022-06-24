@@ -49,7 +49,7 @@ fn main() {
 
     let mut gpu = pollster::block_on(WgpuState::new(&window));
 
-    // let mut software = software::SoftwareRaytracer::new(&gpu);
+    let mut software = software::SoftwareRaytracer::new(&gpu);
     let mut fragment = fragment::FragmentRaytracer::new(&gpu, &space);
 
     let mut last_time = std::time::Instant::now();
@@ -117,10 +117,10 @@ fn main() {
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
 
-                    // let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
+                    let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
                     let fg_cmd = fragment.render(&gpu, &view, &space, camera, yaw, pitch);
 
-                    gpu.queue.submit([/*sw_cmd,*/ fg_cmd]);
+                    gpu.queue.submit([sw_cmd, fg_cmd]);
 
                     frame.present();
                 }
