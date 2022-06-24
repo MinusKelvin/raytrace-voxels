@@ -41,8 +41,8 @@ fn main() {
     let mut up = false;
     let mut down = false;
 
-    let mut times = [Duration::ZERO; 100];
-    let mut next_time = 0;
+    let mut times = [Duration::ZERO; 1000];
+    let mut framecount = 0;
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
@@ -81,13 +81,17 @@ fn main() {
         Event::MainEventsCleared => {
             let now = std::time::Instant::now();
             let delta = now - last_time;
-            times[next_time] = delta;
-            next_time += 1;
-            next_time %= times.len();
-            let fps = times.len() as f64 / times.iter().copied().sum::<Duration>().as_secs_f64();
+            times[framecount % times.len()] = delta;
+            let total_time = times.iter().copied().sum::<Duration>();
+            let fps = times.len() as f64 / total_time.as_secs_f64();
             window.set_title(&format!("{:.0} FPS", fps));
             let delta = delta.as_secs_f32();
             last_time = now;
+
+            if framecount == 5000 {
+                println!("{total_time:.2?}");
+            }
+            framecount += 1;
 
             let mut d = Vec3::ZERO;
             if left {
