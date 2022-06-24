@@ -12,21 +12,26 @@ mod software;
 
 fn main() {
     let mut space = Space::new(IVec3::splat(128));
+    let seed = [
+        218, 29, 221, 89, 183, 102, 2, 53, 176, 211, 63, 26, 195, 8, 107, 217, 90, 70, 178, 102,
+        69, 8, 249, 220, 44, 31, 182, 202, 20, 106, 91, 98,
+    ];
+    let mut rng = rand::rngs::StdRng::from_seed(seed);
     for x in 0..128 {
         for z in 0..128 {
             let h = ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 64;
             for y in 0..128 {
                 if y < h || x == 90 && z == 90 {
                     space.set(IVec3::new(x, y, z), Some([0.9; 3]));
-                } else if thread_rng().gen_bool(0.0001) {
-                    space.set(IVec3::new(x, y, z), Some(thread_rng().gen()));
+                } else if rng.gen_bool(0.0001) {
+                    space.set(IVec3::new(x, y, z), Some(rng.gen()));
                 }
             }
         }
     }
-    let mut yaw = 0.0f32;
-    let mut pitch = 0.0;
-    let mut camera = Vec3::new(64.0, 96.0, 64.0);
+    let mut yaw = -2.18f32;
+    let mut pitch = 0.79;
+    let mut camera = Vec3::new(101.36, 87.95, 92.71);
     let mut grabbed = false;
     let mut left = false;
     let mut right = false;
