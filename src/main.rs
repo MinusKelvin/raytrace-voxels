@@ -49,7 +49,7 @@ fn main() {
 
     let mut gpu = pollster::block_on(WgpuState::new(&window));
 
-    let mut software = software::SoftwareRaytracer::new(&gpu);
+    let mut software = software::SoftwareRaytracer::new(&gpu, &space);
     let mut fragment = fragment::FragmentRaytracer::new(&gpu, &space);
 
     let mut last_time = std::time::Instant::now();

@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use glam::{EulerRot, Vec3, Vec3A};
+use glam::{BVec3, EulerRot, IVec3, Vec3, Vec3A};
 use image::{EncodableLayout, Rgba};
 use rayon::prelude::*;
 use winit::dpi::PhysicalSize;
@@ -14,10 +14,13 @@ pub struct SoftwareRaytracer {
     bind_group_layout: wgpu::BindGroupLayout,
     tex_view: wgpu::TextureView,
     size: PhysicalSize<u32>,
+
+    svo: Svo,
+    scale: i32,
 }
 
 impl SoftwareRaytracer {
-    pub(super) fn new(gpu: &WgpuState) -> Self {
+    pub(super) fn new(gpu: &WgpuState, space: &Space) -> Self {
         let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
@@ -95,6 +98,9 @@ impl SoftwareRaytracer {
                 multiview: None,
             });
 
+        let scale = (space.size.max_element() as u32).next_power_of_two() as i32;
+        let svo = Svo::build(space, IVec3::ZERO, scale);
+
         SoftwareRaytracer {
             tex,
             pipeline,
@@ -102,6 +108,8 @@ impl SoftwareRaytracer {
             bind_group_layout,
             tex_view,
             size: gpu.size,
+            svo,
+            scale,
         }
     }
 
@@ -109,7 +117,7 @@ impl SoftwareRaytracer {
         &mut self,
         gpu: &WgpuState,
         target: &wgpu::TextureView,
-        space: &Space,
+        _space: &Space,
         camera: Vec3,
         yaw: f32,
         pitch: f32,
@@ -168,7 +176,7 @@ impl SoftwareRaytracer {
                             )
                             .normalize(),
                     );
-                    let color = raytrace(space, camera, d, sun, 4);
+                    let color = raytrace(&self.svo, self.scale, camera, d, sun, 4);
                     *pixel = Rgba([
                         (color[0] * 255.0) as u8,
                         (color[1] * 255.0) as u8,
@@ -221,77 +229,128 @@ impl SoftwareRaytracer {
     }
 }
 
-fn raycast(space: &Space, from: Vec3, mut d: Vec3) -> Option<([f32; 3], f32, Vec3)> {
-    if d.x.abs() < f32::EPSILON {
-        d.x = match d.x >= 0.0 {
-            true => f32::EPSILON,
-            false => -f32::EPSILON,
-        };
+fn raycast(svo: &Svo, scale: i32, mut from: Vec3, mut d: Vec3) -> Option<([f32; 3], f32, Vec3)> {
+    let mut a = BVec3::new(false, false, false);
+    if d.x < 0.0 {
+        a.x = true;
+        d.x = -d.x;
+        from.x = scale as f32 - from.x;
     }
-    if d.y.abs() < f32::EPSILON {
-        d.y = match d.y >= 0.0 {
-            true => f32::EPSILON,
-            false => -f32::EPSILON,
-        };
+    if d.y < 0.0 {
+        a.y = true;
+        d.y = -d.y;
+        from.y = scale as f32 - from.y;
     }
-    if d.z.abs() < f32::EPSILON {
-        d.z = match d.z >= 0.0 {
-            true => f32::EPSILON,
-            false => -f32::EPSILON,
-        };
+    if d.z < 0.0 {
+        a.z = true;
+        d.z = -d.z;
+        from.z = scale as f32 - from.z;
     }
 
-    let step = d.signum();
-    let t_delta = step / d;
-    let fudge = (1.0 + step) / 2.0;
-    let mut t_max = t_delta * (fudge - from.fract() * step);
-    let mut p = from.floor().as_ivec3();
-    let step = step.as_ivec3();
-    loop {
-        let t = t_max.min_element();
-        let mut f = Vec3::ZERO;
-        if t_max.x < t_max.y {
-            if t_max.x < t_max.z {
-                t_max.x += t_delta.x;
-                p.x += step.x;
-                f.x = step.x as f32;
-            } else {
-                t_max.z += t_delta.z;
-                p.z += step.z;
-                f.z = step.z as f32;
-            }
-        } else {
-            if t_max.y < t_max.z {
-                t_max.y += t_delta.y;
-                p.y += step.y;
-                f.y = step.y as f32;
-            } else {
-                t_max.z += t_delta.z;
-                p.z += step.z;
-                f.z = step.z as f32;
-            }
-        }
+    if d.x < f32::EPSILON {
+        d.x = f32::EPSILON;
+    }
+    if d.y < f32::EPSILON {
+        d.y = f32::EPSILON;
+    }
+    if d.z < f32::EPSILON {
+        d.z = f32::EPSILON;
+    }
 
-        if let Some(color) = space.get(p)? {
-            return Some((color, t, f));
-        }
+    let t0 = -from / d;
+    let t1 = (Vec3::splat(scale as f32) - from) / d;
+
+    if t0.max_element() < t1.min_element() {
+        raycast_impl(svo, a, t0, t1).map(|(c, t, n)| (c, t, Vec3::select(a, -n, n)))
+    } else {
+        None
     }
 }
 
-fn raytrace(space: &Space, from: Vec3, d: Vec3, sun: Vec3, depth_limit: usize) -> [f32; 3] {
+fn raycast_impl(svo: &Svo, a: BVec3, t0: Vec3, t1: Vec3) -> Option<([f32; 3], f32, Vec3)> {
+    if t1.x < 0.0 || t1.y < 0.0 || t1.z < 0.0 {
+        return None;
+    }
+    let tm = (t0 + t1) * 0.5;
+
+    let mut child;
+    let normal;
+    if t0.x > t0.y {
+        if t0.x > t0.z {
+            child = BVec3::new(false, tm.y < t0.x, tm.z < t0.x);
+            normal = Vec3::X;
+        } else {
+            child = BVec3::new(tm.x < t0.z, tm.y < t0.z, false);
+            normal = Vec3::Z;
+        }
+    } else {
+        if t0.y > t0.z {
+            child = BVec3::new(tm.x < t0.y, false, tm.z < t0.y);
+            normal = Vec3::Y;
+        } else {
+            child = BVec3::new(tm.x < t0.z, tm.y < t0.z, false);
+            normal = Vec3::Z;
+        }
+    }
+
+    let octants = match svo {
+        Svo::Transparent => return None,
+        Svo::Color(c) => return Some((*c, t0.max_element(), normal)),
+        Svo::Recurse(o) => o,
+    };
+
+    fn min_spot(v: Vec3) -> BVec3 {
+        if v.x < v.y {
+            if v.x < v.z {
+                BVec3::new(true, false, false)
+            } else {
+                BVec3::new(false, false, true)
+            }
+        } else {
+            if v.y < v.z {
+                BVec3::new(false, true, false)
+            } else {
+                BVec3::new(false, false, true)
+            }
+        }
+    }
+
+    fn xor(a: BVec3, b: BVec3) -> BVec3 {
+        BVec3::new(a.x ^ b.x, a.y ^ b.y, a.z ^ b.z)
+    }
+
+    loop {
+        if let Some(result) = raycast_impl(
+            &octants[xor(child, a).bitmask() as usize],
+            a,
+            Vec3::select(child, tm, t0),
+            Vec3::select(child, t1, tm),
+        ) {
+            return Some(result);
+        }
+        let diff = min_spot(Vec3::select(child, t1, tm));
+        if (child & diff).any() {
+            return None;
+        }
+        child |= diff;
+    }
+}
+
+fn raytrace(svo: &Svo, scale: i32, from: Vec3, d: Vec3, sun: Vec3, depth_limit: usize) -> [f32; 3] {
     if depth_limit == 0 {
         return [0.0; 3];
     }
-    if let Some((mut c, t, f)) = raycast(space, from, d) {
+    if let Some((mut c, t, f)) = raycast(svo, scale, from, d) {
         let is_reflective = c == [1.0; 3];
         let p = from + d * t;
         let lighting = sun.dot(-f).max(0.0) / 2.0 + 0.5;
-        let shadow = raycast(space, p - f * 0.001, sun).is_none() as i32 as f32;
+        let shadow = raycast(svo, scale, p - f * 0.001, sun).is_none() as i32 as f32;
         let lighting = lighting.min(shadow / 2.0 + 0.5);
         c.iter_mut().for_each(|v| *v *= lighting);
         if is_reflective {
             let reflected = raytrace(
-                space,
+                svo,
+                scale,
                 p - f * 0.001,
                 d - 2.0 * d.project_onto(f),
                 sun,
@@ -304,5 +363,48 @@ fn raytrace(space: &Space, from: Vec3, d: Vec3, sun: Vec3, depth_limit: usize) -
         c
     } else {
         [0.0; 3]
+    }
+}
+
+#[derive(Debug)]
+enum Svo {
+    Recurse(Box<[Svo; 8]>),
+    Color([f32; 3]),
+    Transparent,
+}
+
+impl Svo {
+    fn build(space: &Space, min: IVec3, size: i32) -> Svo {
+        if size == 1 {
+            match space.get(min) {
+                Some(Some(color)) => Svo::Color(color),
+                Some(None) | None => Svo::Transparent,
+            }
+        } else {
+            let ns = size / 2;
+            let octants = [
+                Svo::build(space, min + IVec3::new(0, 0, 0), ns),
+                Svo::build(space, min + IVec3::new(ns, 0, 0), ns),
+                Svo::build(space, min + IVec3::new(0, ns, 0), ns),
+                Svo::build(space, min + IVec3::new(ns, ns, 0), ns),
+                Svo::build(space, min + IVec3::new(0, 0, ns), ns),
+                Svo::build(space, min + IVec3::new(ns, 0, ns), ns),
+                Svo::build(space, min + IVec3::new(0, ns, ns), ns),
+                Svo::build(space, min + IVec3::new(ns, ns, ns), ns),
+            ];
+            if let Svo::Color(target) = octants[0] {
+                if octants
+                    .iter()
+                    .all(|v| matches!(v, &Svo::Color(c) if c == target))
+                {
+                    return Svo::Color(target);
+                }
+            }
+            if octants.iter().all(|v| matches!(v, Svo::Transparent)) {
+                Svo::Transparent
+            } else {
+                Svo::Recurse(Box::new(octants))
+            }
+        }
     }
 }
