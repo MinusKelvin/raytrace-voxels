@@ -40,6 +40,8 @@ struct RaycastResult {
     normal: vec3<f32>;
 };
 
+let EPS: f32 = 0.0000001;
+
 fn raycast(from: vec3<f32>, d: vec3<f32>, limit: f32) -> RaycastResult {
     var result: RaycastResult;
     result.hit = false;
@@ -47,23 +49,36 @@ fn raycast(from: vec3<f32>, d: vec3<f32>, limit: f32) -> RaycastResult {
     result.distance = 0.0;
     result.normal = vec3<f32>(0.0, 0.0, 0.0);
 
+    var d = d;
+    if (abs(d.x) < EPS) {
+        if (d.x >= 0.0) {
+            d.x = EPS;
+        } else {
+            d.x = -EPS;
+        }
+    }
+    if (abs(d.y) < EPS) {
+        if (d.y >= 0.0) {
+            d.y = EPS;
+        } else {
+            d.y = -EPS;
+        }
+    }
+    if (abs(d.z) < EPS) {
+        if (d.z >= 0.0) {
+            d.z = EPS;
+        } else {
+            d.z = -EPS;
+        }
+    }
+
     let step_f = sign(d);
     let t_delta = step_f / d;
     let fudge = (1.0 + step_f) / 2.0;
     var t_max = t_delta * (fudge - fract(from) * step_f);
-    if (t_max.x != t_max.x) {
-        t_max.x = 1.0 / 0.0;
-    }
-    if (t_max.y != t_max.y) {
-        t_max.y = 1.0 / 0.0;
-    }
-    if (t_max.z != t_max.z) {
-        t_max.z = 1.0 / 0.0;
-    }
     var p = vec3<i32>(floor(from));
     let step = vec3<i32>(step_f);
-    let iter_limit = uniforms.size.x + uniforms.size.y + uniforms.size.z;
-    for (var i = 0; i < iter_limit; i = i + 1) {
+    loop {
         let t = min(t_max.x, min(t_max.y, t_max.z));
         if (t > limit) {
             break;

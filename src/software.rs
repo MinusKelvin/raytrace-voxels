@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use glam::{Vec3, Vec3A, EulerRot};
+use glam::{EulerRot, Vec3, Vec3A};
 use image::{EncodableLayout, Rgba};
 use rayon::prelude::*;
 use winit::dpi::PhysicalSize;
@@ -143,7 +143,7 @@ impl SoftwareRaytracer {
         }
 
         let looking = glam::Mat3A::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
-    
+
         let halfwidth = (self.size.width / 2) as f32 / 2.0;
         let halfheight = self.size.height as f32 / 2.0;
         let sun = Vec3::new(0.1, 1.0, 0.2).normalize();
@@ -221,23 +221,32 @@ impl SoftwareRaytracer {
     }
 }
 
-fn raycast(space: &Space, from: Vec3, d: Vec3) -> Option<([f32; 3], f32, Vec3)> {
+fn raycast(space: &Space, from: Vec3, mut d: Vec3) -> Option<([f32; 3], f32, Vec3)> {
+    if d.x.abs() < f32::EPSILON {
+        d.x = match d.x >= 0.0 {
+            true => f32::EPSILON,
+            false => -f32::EPSILON,
+        };
+    }
+    if d.y.abs() < f32::EPSILON {
+        d.y = match d.y >= 0.0 {
+            true => f32::EPSILON,
+            false => -f32::EPSILON,
+        };
+    }
+    if d.z.abs() < f32::EPSILON {
+        d.z = match d.z >= 0.0 {
+            true => f32::EPSILON,
+            false => -f32::EPSILON,
+        };
+    }
+
     let step = d.signum();
     let t_delta = step / d;
     let fudge = (1.0 + step) / 2.0;
     let mut t_max = t_delta * (fudge - from.fract() * step);
-    if t_max.x.is_nan() {
-        t_max.x = f32::INFINITY;
-    }
-    if t_max.y.is_nan() {
-        t_max.y = f32::INFINITY;
-    }
-    if t_max.z.is_nan() {
-        t_max.z = f32::INFINITY;
-    }
     let mut p = from.floor().as_ivec3();
     let step = step.as_ivec3();
-    let mut i = 0;
     loop {
         let t = t_max.min_element();
         let mut f = Vec3::ZERO;
@@ -265,12 +274,6 @@ fn raycast(space: &Space, from: Vec3, d: Vec3) -> Option<([f32; 3], f32, Vec3)> 
 
         if let Some(color) = space.get(p)? {
             return Some((color, t, f));
-        }
-
-        i += 1;
-        if i > 100000 {
-            dbg!(step, t_max, from, d, p);
-            std::process::exit(1);
         }
     }
 }
