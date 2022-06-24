@@ -1,9 +1,9 @@
 var<private> coords: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
-    vec2<f32>(-1.0, -1.0),
-    vec2<f32>(-1.0,  1.0),
+    vec2<f32>(-0.0, -1.0),
+    vec2<f32>(-0.0,  1.0),
     vec2<f32>( 1.0, -1.0),
     vec2<f32>( 1.0, -1.0),
-    vec2<f32>(-1.0,  1.0),
+    vec2<f32>(-0.0,  1.0),
     vec2<f32>( 1.0,  1.0),
 );
 
@@ -204,7 +204,7 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
 
 [[stage(fragment)]]
 fn fragment_main([[builtin(position)]] pos: vec4<f32>) -> [[location(0)]] vec4<f32> {
-    var ld = 2.0 * (pos.xy - uniforms.vp_size / 2.0) / uniforms.vp_size.y;
+    var ld = 2.0 * (pos.xy - vec2<f32>(3.0 * uniforms.vp_size.x / 4.0, uniforms.vp_size.y / 2.0)) / uniforms.vp_size.y;
     var d = uniforms.looking * normalize(vec3<f32>(ld.x, -ld.y, 1.0));
     return raytrace(uniforms.pos, d);
 }
