@@ -1,8 +1,3 @@
-struct VertexOutput {
-    [[builtin(position)]] pos: vec4<f32>;
-    [[location(0)]] p: vec2<f32>;
-};
-
 var<private> coords: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
     vec2<f32>(-1.0, -1.0),
     vec2<f32>(-1.0,  1.0),
@@ -18,7 +13,7 @@ struct Uniforms {
     size: vec3<i32>;
     sun: vec3<f32>;
     vp_size: vec2<f32>;
-    orientations: array<vec3<f32>, 32>;
+    rng: vec3<u32>;
 };
 
 struct Space {
@@ -116,6 +111,28 @@ fn raycast(from: vec3<f32>, d: vec3<f32>, limit: f32) -> RaycastResult {
     return result;
 }
 
+fn pcg3d(b: vec3<u32>) -> vec3<u32> {
+    var v = b
+        * vec3<u32>(1664525u, 1664525u, 1664525u)
+        + 1013904223u
+        ^ uniforms.rng
+        ;
+    v.x = v.x + v.y * v.z;
+    v.y = v.y + v.x * v.z;
+    v.z = v.z + v.y * v.x;
+    v = v ^ v >> vec3<u32>(16u, 16u, 16u);
+    v.x = v.x + v.y * v.z;
+    v.y = v.y + v.x * v.z;
+    v.z = v.z + v.y * v.x;
+    return v;
+}
+
+fn random_direction(p: vec3<f32>, i: i32) -> vec3<f32> {
+    return normalize(vec3<f32>(pcg3d(
+        bitcast<vec3<u32>>(p + f32(i))
+    ) % 65536u) / 32768.0 - 1.0);
+}
+
 fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
     var color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     var pos = from;
@@ -126,23 +143,32 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
         if (ray.hit) {
             let p = pos + dir * ray.distance;
             var lighting = max(0.0, dot(uniforms.sun, -ray.normal));
-            let shadowcast = raycast(p - ray.normal * 0.001, uniforms.sun, 1.0 / 0.0);
-            lighting = min(lighting, f32(!shadowcast.hit));
+
+            var shadow = 0.0;
+            for (var i = 0; i < 1; i = i + 1) {
+                let sun = normalize(100.0 * uniforms.sun + random_direction(p, i));
+                let shadowcast = raycast(p - ray.normal * 0.001, sun, 1.0 / 0.0);
+                if (!shadowcast.hit) {
+                    shadow = shadow + 1.0;
+                }
+            }
+            lighting = min(lighting, shadow / 1.0);
 
             var ao = 0.0;
-            for (var i = 0; i < 32; i = i + 1) {
-                var d = uniforms.orientations[i];
-                if (dot(d, ray.normal) > 0.0) {
-                    d = reflect(d, ray.normal);
-                }
-                let aocast = raycast(p - ray.normal * 0.001, d, 4.0);
+            for (var i = 0; i < 2; i = i + 1) {
+                let d = random_direction(p, i + 100);
+                let aocast = raycast(
+                    p - ray.normal * 0.001,
+                    faceForward(d, reflect(d, ray.normal), -ray.normal),
+                    4.0
+                );
                 if (aocast.hit) {
                     ao = ao + aocast.distance / 4.0;
                 } else {
                     ao = ao + 1.0;
                 }
             }
-            ao = ao / 32.0;
+            ao = ao / 2.0;
 
             color = color + ray.color *
                 (lighting / 2.0 + 0.5) *

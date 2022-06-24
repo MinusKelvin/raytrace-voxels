@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use glam::{EulerRot, IVec3, Mat3, Vec3};
 use rand::prelude::*;
 use winit::dpi::PhysicalSize;
@@ -14,9 +16,9 @@ fn main() {
         for z in 0..128 {
             let h = ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 64;
             for y in 0..128 {
-                if y < h {
+                if y < h || x == 90 && z == 90 {
                     space.set(IVec3::new(x, y, z), Some([0.9; 3]));
-                } else if thread_rng().gen_bool(0.001) {
+                } else if thread_rng().gen_bool(0.0001) {
                     space.set(IVec3::new(x, y, z), Some(thread_rng().gen()));
                 }
             }
@@ -32,6 +34,9 @@ fn main() {
     let mut backward = false;
     let mut up = false;
     let mut down = false;
+
+    let mut times = [Duration::ZERO; 100];
+    let mut next_time = 0;
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
@@ -69,11 +74,13 @@ fn main() {
         },
         Event::MainEventsCleared => {
             let now = std::time::Instant::now();
-            let delta = (now - last_time).as_secs_f32();
-            window.set_title(&format!(
-                "gpu voxel raytrace: {:.2?} frametime",
-                now - last_time
-            ));
+            let delta = now - last_time;
+            times[next_time] = delta;
+            next_time += 1;
+            next_time %= times.len();
+            let fps = times.len() as f64 / times.iter().copied().sum::<Duration>().as_secs_f64();
+            window.set_title(&format!("{:.0} FPS", fps));
+            let delta = delta.as_secs_f32();
             last_time = now;
 
             let mut d = Vec3::ZERO;

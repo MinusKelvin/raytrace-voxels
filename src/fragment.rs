@@ -12,8 +12,6 @@ pub struct FragmentRaytracer {
     uniform_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
     space_group: wgpu::BindGroup,
-
-    pattern: [Vec4; 32],
 }
 
 impl FragmentRaytracer {
@@ -141,16 +139,6 @@ impl FragmentRaytracer {
             uniform_group,
             uniform_buffer,
             space_group,
-
-            pattern: [(); 32].map(|_| {
-                Vec3::new(
-                    thread_rng().gen::<f32>() - 0.5,
-                    thread_rng().gen::<f32>() - 0.5,
-                    thread_rng().gen::<f32>() - 0.5,
-                )
-                .normalize()
-                .extend(0.0)
-            })
         }
     }
 
@@ -179,11 +167,12 @@ impl FragmentRaytracer {
             size: space.size,
             sun: Vec3::new(0.1, 1.0, 0.2).normalize(),
             vp_size: Vec2::new(gpu.size.width as f32, gpu.size.height as f32),
+            rng: thread_rng().gen(),
             _padding0: 0,
             _padding1: 0,
             _padding2: 0,
             _padding3: [0; 2],
-            orientations: self.pattern,
+            _padding4: 0,
         };
         gpu.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -224,5 +213,6 @@ struct Uniforms {
     _padding2: u32,
     vp_size: Vec2,
     _padding3: [u32; 2],
-    orientations: [Vec4; 32],
+    rng: [u32; 3],
+    _padding4: u32,
 }
