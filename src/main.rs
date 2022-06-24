@@ -19,19 +19,20 @@ fn main() {
     let mut rng = rand::rngs::StdRng::from_seed(seed);
     for x in 0..128 {
         for z in 0..128 {
-            let h = ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 64;
-            for y in 0..128 {
-                if y < h || x == 90 && z == 90 {
-                    space.set(IVec3::new(x, y, z), Some([0.9; 3]));
-                } else if rng.gen_bool(0.0001) {
-                    space.set(IVec3::new(x, y, z), Some(rng.gen()));
+            let h = match rng.gen_bool(0.002) {
+                true => 128,
+                false => {
+                    ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 64
                 }
+            };
+            for y in 0..h {
+                 space.set(IVec3::new(x, y, z), Some([0.99; 3]));
             }
         }
     }
-    let mut yaw = -2.18f32;
-    let mut pitch = 0.79;
-    let mut camera = Vec3::new(101.36, 87.95, 92.71);
+    let mut yaw = -0.85f32;
+    let mut pitch = 0.69;
+    let mut camera = Vec3::new(96.36, 84.91, 23.17);
     let mut grabbed = false;
     let mut left = false;
     let mut right = false;
