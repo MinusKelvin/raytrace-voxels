@@ -261,63 +261,138 @@ fn raycast(svo: &Svo, scale: i32, mut from: Vec3, mut d: Vec3) -> Option<([f32; 
     let t1 = (Vec3::splat(scale as f32) - from) / d;
 
     if t0.max_element() < t1.min_element() {
-        raycast_impl(svo, a, t0, t1).map(|(c, t, n)| (c, t, Vec3::select(a, -n, n)))
+        iter_raycast_impl(svo, a, t0, t1).map(|(c, t, n)| (c, t, Vec3::select(a, -n, n)))
     } else {
         None
     }
+}
+
+fn min_spot(v: Vec3) -> BVec3 {
+    if v.x < v.y {
+        if v.x < v.z {
+            BVec3::new(true, false, false)
+        } else {
+            BVec3::new(false, false, true)
+        }
+    } else {
+        if v.y < v.z {
+            BVec3::new(false, true, false)
+        } else {
+            BVec3::new(false, false, true)
+        }
+    }
+}
+
+fn xor(a: BVec3, b: BVec3) -> BVec3 {
+    BVec3::new(a.x ^ b.x, a.y ^ b.y, a.z ^ b.z)
+}
+
+fn first_child(t0: Vec3, tm: Vec3) -> BVec3 {
+    if t0.x > t0.y {
+        if t0.x > t0.z {
+            BVec3::new(false, tm.y < t0.x, tm.z < t0.x)
+        } else {
+            BVec3::new(tm.x < t0.z, tm.y < t0.z, false)
+        }
+    } else {
+        if t0.y > t0.z {
+            BVec3::new(tm.x < t0.y, false, tm.z < t0.y)
+        } else {
+            BVec3::new(tm.x < t0.z, tm.y < t0.z, false)
+        }
+    }
+}
+
+fn iter_raycast_impl(svo: &Svo, a: BVec3, t0: Vec3, t1: Vec3) -> Option<([f32; 3], f32, Vec3)> {
+    let tm = (t0 + t1) * 0.5;
+
+    let mut stack = Vec::with_capacity(32);
+    stack.push((svo, t0, t1, first_child(t0, tm)));
+
+    while let Some(&mut (svo, t0, t1, ref mut child)) = stack.last_mut() {
+        if t1.x < 0.0 || t1.y < 0.0 || t1.z < 0.0 {
+            stack.pop();
+            continue;
+        }
+        let octants = match svo {
+            Svo::Transparent => {
+                stack.pop();
+                continue;
+            }
+            Svo::Color(c) => {
+                return Some((
+                    *c,
+                    t0.max_element(),
+                    if t0.x > t0.y {
+                        match t0.x > t0.z {
+                            true => Vec3::X,
+                            false => Vec3::Z,
+                        }
+                    } else {
+                        match t0.y > t0.z {
+                            true => Vec3::Y,
+                            false => Vec3::Z,
+                        }
+                    },
+                ));
+            }
+            Svo::Recurse(octants) => octants,
+        };
+
+        let tm = (t0 + t1) * 0.5;
+        let diff = min_spot(Vec3::select(*child, t1, tm));
+
+        let nt0 = Vec3::select(*child, tm, t0);
+        let nt1 = Vec3::select(*child, t1, tm);
+        let ntm = (nt0 + nt1) * 0.5;
+        let next_frame = (
+            &octants[xor(*child, a).bitmask() as usize],
+            nt0,
+            nt1,
+            first_child(nt0, ntm),
+        );
+
+        if (*child & diff).any() {
+            stack.pop();
+        } else {
+            *child |= diff;
+        }
+        stack.push(next_frame);
+    }
+
+    None
 }
 
 fn raycast_impl(svo: &Svo, a: BVec3, t0: Vec3, t1: Vec3) -> Option<([f32; 3], f32, Vec3)> {
     if t1.x < 0.0 || t1.y < 0.0 || t1.z < 0.0 {
         return None;
     }
-    let tm = (t0 + t1) * 0.5;
-
-    let mut child;
-    let normal;
-    if t0.x > t0.y {
-        if t0.x > t0.z {
-            child = BVec3::new(false, tm.y < t0.x, tm.z < t0.x);
-            normal = Vec3::X;
-        } else {
-            child = BVec3::new(tm.x < t0.z, tm.y < t0.z, false);
-            normal = Vec3::Z;
-        }
-    } else {
-        if t0.y > t0.z {
-            child = BVec3::new(tm.x < t0.y, false, tm.z < t0.y);
-            normal = Vec3::Y;
-        } else {
-            child = BVec3::new(tm.x < t0.z, tm.y < t0.z, false);
-            normal = Vec3::Z;
-        }
-    }
 
     let octants = match svo {
         Svo::Transparent => return None,
-        Svo::Color(c) => return Some((*c, t0.max_element(), normal)),
+        Svo::Color(c) => {
+            return Some((
+                *c,
+                t0.max_element(),
+                if t0.x > t0.y {
+                    match t0.x > t0.z {
+                        true => Vec3::X,
+                        false => Vec3::Z,
+                    }
+                } else {
+                    match t0.y > t0.z {
+                        true => Vec3::Y,
+                        false => Vec3::Z,
+                    }
+                },
+            ))
+        }
         Svo::Recurse(o) => o,
     };
 
-    fn min_spot(v: Vec3) -> BVec3 {
-        if v.x < v.y {
-            if v.x < v.z {
-                BVec3::new(true, false, false)
-            } else {
-                BVec3::new(false, false, true)
-            }
-        } else {
-            if v.y < v.z {
-                BVec3::new(false, true, false)
-            } else {
-                BVec3::new(false, false, true)
-            }
-        }
-    }
+    let tm = (t0 + t1) * 0.5;
 
-    fn xor(a: BVec3, b: BVec3) -> BVec3 {
-        BVec3::new(a.x ^ b.x, a.y ^ b.y, a.z ^ b.z)
-    }
+    let mut child = first_child(t0, tm);
 
     loop {
         if let Some(result) = raycast_impl(
