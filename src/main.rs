@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use glam::{EulerRot, IVec3, Mat3, Vec3};
@@ -26,10 +27,11 @@ fn main() {
                 }
             };
             for y in 0..h {
-                 space.set(IVec3::new(x, y, z), Some([0.99; 3]));
+                space.set(IVec3::new(x, y, z), Cell::Solid([0.99; 3]));
             }
         }
     }
+    space.calculate_distances();
     let mut yaw = 0.95f32;
     let mut pitch = 0.52;
     let mut camera = Vec3::new(32.44, 85.78, 82.29);
@@ -205,23 +207,16 @@ impl WgpuState {
     }
 }
 
-struct Space<T = Option<[f32; 3]>> {
+struct Space {
     size: IVec3,
-    voxels: Vec<T>,
+    voxels: Vec<Cell>,
 }
 
-impl<T: Clone> Space<T> {
-    fn new(size: IVec3) -> Self
-    where
-        T: Default,
-    {
-        Self::new_from(size, T::default())
-    }
-
-    fn new_from(size: IVec3, elem: T) -> Self {
+impl Space {
+    fn new(size: IVec3) -> Self {
         Space {
             size,
-            voxels: vec![elem; (size.x * size.y * size.z) as usize],
+            voxels: vec![Cell::Empty(u32::MAX); (size.x * size.y * size.z) as usize],
         }
     }
 
@@ -233,12 +228,61 @@ impl<T: Clone> Space<T> {
         }
     }
 
-    fn get(&self, p: IVec3) -> Option<T> {
-        Some(self.voxels[self.idx(p)?].clone())
+    fn get(&self, p: IVec3) -> Option<Cell> {
+        Some(self.voxels[self.idx(p)?])
     }
 
-    fn set(&mut self, p: IVec3, v: T) {
+    fn set(&mut self, p: IVec3, v: Cell) {
         let i = self.idx(p).unwrap();
         self.voxels[i] = v;
     }
+
+    fn calculate_distances(&mut self) {
+        let mut decreases = VecDeque::new();
+
+        for x in 0..self.size.x {
+            for y in 0..self.size.y {
+                for z in 0..self.size.z {
+                    let p = IVec3::new(x, y, z);
+                    match self.get(p).unwrap() {
+                        Cell::Solid(_) => decreases.push_back((p, 0)),
+                        Cell::Empty(_) => self.set(p, Cell::Empty(u32::MAX)),
+                    }
+                }
+            }
+        }
+
+        while let Some((p, v)) = decreases.pop_front() {
+            let propogate;
+            match self.get(p).unwrap() {
+                Cell::Solid(_) => {
+                    propogate = v == 0;
+                }
+                Cell::Empty(a) => {
+                    propogate = v < a;
+                    if propogate {
+                        self.set(p, Cell::Empty(v));
+                    }
+                }
+            }
+            if propogate {
+                for x in p.x - 1..=p.x + 1 {
+                    for y in p.y - 1..=p.y + 1 {
+                        for z in p.z - 1..=p.z + 1 {
+                            let p = IVec3::new(x, y, z);
+                            if self.idx(p).is_some() {
+                                decreases.push_back((p, v + 1));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Cell {
+    Solid([f32; 3]),
+    Empty(u32),
 }

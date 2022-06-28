@@ -1,12 +1,11 @@
-use std::collections::VecDeque;
 use std::num::NonZeroU32;
 
-use glam::{EulerRot, IVec3, Vec3, Vec3A};
+use glam::{EulerRot, Vec3, Vec3A};
 use image::{EncodableLayout, Rgba};
 use rayon::prelude::*;
 use winit::dpi::PhysicalSize;
 
-use crate::{Space, WgpuState};
+use crate::{Space, WgpuState, Cell};
 
 pub struct SoftwareRaytracer {
     tex: wgpu::Texture,
@@ -15,12 +14,10 @@ pub struct SoftwareRaytracer {
     bind_group_layout: wgpu::BindGroupLayout,
     tex_view: wgpu::TextureView,
     size: PhysicalSize<u32>,
-
-    space: Space<Cell>,
 }
 
 impl SoftwareRaytracer {
-    pub(super) fn new(gpu: &WgpuState, space: &Space) -> Self {
+    pub(super) fn new(gpu: &WgpuState, _space: &Space) -> Self {
         let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
@@ -98,47 +95,6 @@ impl SoftwareRaytracer {
                 multiview: None,
             });
 
-        let mut df_space = Space::new_from(space.size, Cell::Empty(u32::MAX));
-        let mut decreases = VecDeque::new();
-        for x in 0..space.size.x {
-            for y in 0..space.size.y {
-                for z in 0..space.size.z {
-                    let p = IVec3::new(x, y, z);
-                    if let Some(c) = space.get(p).unwrap() {
-                        df_space.set(p, Cell::Solid(c));
-                        decreases.push_back((p, 0));
-                    }
-                }
-            }
-        }
-
-        while let Some((p, v)) = decreases.pop_front() {
-            let propogate;
-            match df_space.get(p).unwrap() {
-                Cell::Solid(_) => {
-                    propogate = v == 0;
-                }
-                Cell::Empty(a) => {
-                    propogate = v < a;
-                    if propogate {
-                        df_space.set(p, Cell::Empty(v));
-                    }
-                }
-            }
-            if propogate {
-                for x in p.x - 1..=p.x + 1 {
-                    for y in p.y - 1..=p.y + 1 {
-                        for z in p.z - 1..=p.z + 1 {
-                            let p = IVec3::new(x, y, z);
-                            if df_space.idx(p).is_some() {
-                                decreases.push_back((p, v + 1));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         SoftwareRaytracer {
             tex,
             pipeline,
@@ -146,8 +102,6 @@ impl SoftwareRaytracer {
             bind_group_layout,
             tex_view,
             size: gpu.size,
-
-            space: df_space,
         }
     }
 
@@ -214,7 +168,7 @@ impl SoftwareRaytracer {
                             )
                             .normalize(),
                     );
-                    let color = raytrace(&self.space, camera, d, sun, 4);
+                    let color = raytrace(space, camera, d, sun, 4);
                     *pixel = Rgba([
                         (color[0] * 255.0) as u8,
                         (color[1] * 255.0) as u8,
@@ -267,7 +221,7 @@ impl SoftwareRaytracer {
     }
 }
 
-fn raycast(space: &Space<Cell>, from: Vec3, mut d: Vec3) -> Option<([f32; 3], f32, Vec3)> {
+fn raycast(space: &Space, from: Vec3, mut d: Vec3) -> Option<([f32; 3], f32, Vec3)> {
     if d.x.abs() < f32::EPSILON {
         d.x = match d.x >= 0.0 {
             true => f32::EPSILON,
@@ -335,7 +289,7 @@ fn raycast(space: &Space<Cell>, from: Vec3, mut d: Vec3) -> Option<([f32; 3], f3
     }
 }
 
-fn raytrace(space: &Space<Cell>, from: Vec3, d: Vec3, sun: Vec3, depth_limit: usize) -> [f32; 3] {
+fn raytrace(space: &Space, from: Vec3, d: Vec3, sun: Vec3, depth_limit: usize) -> [f32; 3] {
     if depth_limit == 0 {
         return [0.0; 3];
     }
@@ -362,10 +316,4 @@ fn raytrace(space: &Space<Cell>, from: Vec3, d: Vec3, sun: Vec3, depth_limit: us
     } else {
         [0.0; 3]
     }
-}
-
-#[derive(Clone, Copy)]
-enum Cell {
-    Solid([f32; 3]),
-    Empty(u32),
 }

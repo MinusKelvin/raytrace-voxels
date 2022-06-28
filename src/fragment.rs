@@ -5,7 +5,7 @@ use glam::{EulerRot, IVec3, Mat3, Vec2, Vec3, Vec4};
 use rand::prelude::*;
 use wgpu::util::DeviceExt;
 
-use crate::{Space, WgpuState};
+use crate::{Space, WgpuState, Cell};
 
 pub struct FragmentRaytracer {
     pipeline: wgpu::RenderPipeline,
@@ -58,13 +58,13 @@ impl FragmentRaytracer {
             .voxels
             .iter()
             .map(|&v| match v {
-                Some(a) => [
+                Cell::Solid(a) => [
                     (a[0] * 255.0) as u8,
                     (a[1] * 255.0) as u8,
                     (a[2] * 255.0) as u8,
                     255,
                 ],
-                None => [0; 4],
+                Cell::Empty(d) => d.to_le_bytes(),
             })
             .collect();
 
