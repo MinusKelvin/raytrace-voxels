@@ -49,7 +49,7 @@ fn main() {
 
     let mut gpu = pollster::block_on(WgpuState::new(&window));
 
-    let mut software = software::SoftwareRaytracer::new(&gpu);
+    let mut software = software::SoftwareRaytracer::new(&gpu, &space);
     let mut fragment = fragment::FragmentRaytracer::new(&gpu, &space);
 
     let mut last_time = std::time::Instant::now();
@@ -205,16 +205,23 @@ impl WgpuState {
     }
 }
 
-struct Space {
+struct Space<T = Option<[f32; 3]>> {
     size: IVec3,
-    voxels: Vec<Option<[f32; 3]>>,
+    voxels: Vec<T>,
 }
 
-impl Space {
-    fn new(size: IVec3) -> Space {
+impl<T: Clone> Space<T> {
+    fn new(size: IVec3) -> Self
+    where
+        T: Default,
+    {
+        Self::new_from(size, T::default())
+    }
+
+    fn new_from(size: IVec3, elem: T) -> Self {
         Space {
             size,
-            voxels: vec![None; (size.x * size.y * size.z) as usize],
+            voxels: vec![elem; (size.x * size.y * size.z) as usize],
         }
     }
 
@@ -226,11 +233,11 @@ impl Space {
         }
     }
 
-    fn get(&self, p: IVec3) -> Option<Option<[f32; 3]>> {
-        Some(self.voxels[self.idx(p)?])
+    fn get(&self, p: IVec3) -> Option<T> {
+        Some(self.voxels[self.idx(p)?].clone())
     }
 
-    fn set(&mut self, p: IVec3, v: Option<[f32; 3]>) {
+    fn set(&mut self, p: IVec3, v: T) {
         let i = self.idx(p).unwrap();
         self.voxels[i] = v;
     }
