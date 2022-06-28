@@ -11,16 +11,16 @@ mod fragment;
 mod software;
 
 fn main() {
-    let mut space = Space::new(IVec3::splat(128));
+    let mut space = Space::new(IVec3::splat(256));
     let seed = [
         218, 29, 221, 89, 183, 102, 2, 53, 176, 211, 63, 26, 195, 8, 107, 217, 90, 70, 178, 102,
         69, 8, 249, 220, 44, 31, 182, 202, 20, 106, 91, 98,
     ];
     let mut rng = rand::rngs::StdRng::from_seed(seed);
-    for x in 0..128 {
-        for z in 0..128 {
-            let h = match rng.gen_bool(0.002) {
-                true => 128,
+    for x in 0..256 {
+        for z in 0..256 {
+            let h = match rng.gen_bool(0.001) {
+                true => rng.gen_range(96..256),
                 false => {
                     ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 64
                 }
@@ -30,9 +30,9 @@ fn main() {
             }
         }
     }
-    let mut yaw = -0.85f32;
-    let mut pitch = 0.69;
-    let mut camera = Vec3::new(96.36, 84.91, 23.17);
+    let mut yaw = 0.95f32;
+    let mut pitch = 0.52;
+    let mut camera = Vec3::new(32.44, 85.78, 82.29);
     let mut grabbed = false;
     let mut left = false;
     let mut right = false;
