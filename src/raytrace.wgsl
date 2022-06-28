@@ -143,10 +143,18 @@ fn pcg3d(b: vec3<u32>) -> vec3<u32> {
     return v;
 }
 
-fn random_direction(p: vec3<f32>, i: i32) -> vec3<f32> {
-    return normalize(vec3<f32>(pcg3d(
-        bitcast<vec3<u32>>(p + f32(i))
-    ) % 65536u) / 32768.0 - 1.0);
+var<private> rng: u32 = 0;
+fn random_direction(p: vec3<f32>) -> vec3<f32> {
+    loop {
+        rng = rng + 1u;
+        let d = vec3<f32>(pcg3d(
+            bitcast<vec3<u32>>(p) + rng
+        ) % 65536u) / 32768.0 - 1.0;
+        if (dot(d, d) <= 1.0) {
+            return normalize(d);
+        }
+    }
+    return vec3<f32>(0.0);
 }
 
 fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
@@ -162,7 +170,7 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
 
             var shadow = 0.0;
             for (var i = 0; i < 1; i = i + 1) {
-                let sun = normalize(100.0 * uniforms.sun + random_direction(p, i));
+                let sun = normalize(100.0 * uniforms.sun + random_direction(p));
                 let shadowcast = raycast(p - ray.normal * 0.001, sun, 1.0 / 0.0);
                 if (!shadowcast.hit) {
                     shadow = shadow + 1.0;
@@ -172,7 +180,7 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
 
             var ao = 0.0;
             for (var i = 0; i < 2; i = i + 1) {
-                let d = random_direction(p, i + 100);
+                let d = random_direction(p);
                 let aocast = raycast(
                     p - ray.normal * 0.001,
                     faceForward(d, reflect(d, ray.normal), -ray.normal),
