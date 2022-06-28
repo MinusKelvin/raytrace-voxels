@@ -1,9 +1,9 @@
 var<private> coords: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
-    vec2<f32>(-0.0, -1.0),
-    vec2<f32>(-0.0,  1.0),
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>(-1.0,  1.0),
     vec2<f32>( 1.0, -1.0),
     vec2<f32>( 1.0, -1.0),
-    vec2<f32>(-0.0,  1.0),
+    vec2<f32>(-1.0,  1.0),
     vec2<f32>( 1.0,  1.0),
 );
 
@@ -75,47 +75,48 @@ fn raycast(from: vec3<f32>, d: vec3<f32>, limit: f32) -> RaycastResult {
     let step_f = sign(d);
     let t_delta = step_f / d;
     let fudge = (1.0 + step_f) / 2.0;
-    var t_max = t_delta * (fudge - fract(from) * step_f);
+    var t_curr = t_delta * (fudge - fract(from) * step_f - 1.0);
     var p = vec3<i32>(floor(from));
+    var empty_size = 1.0;
     let step = vec3<i32>(step_f);
     loop {
+        let t_max = t_curr + t_delta * empty_size;
         let t = min(t_max.x, min(t_max.y, t_max.z));
         if (t > limit) {
             break;
         }
         var f = vec3<f32>(0.0, 0.0, 0.0);
+        var step_size = (t - t_curr) / t_delta;
         if (t_max.x < t_max.y) {
             if (t_max.x < t_max.z) {
-                t_max.x = t_max.x + t_delta.x;
-                p.x = p.x + step.x;
+                step_size.x = empty_size;
                 f.x = f32(step.x);
             } else {
-                t_max.z = t_max.z + t_delta.z;
-                p.z = p.z + step.z;
+                step_size.z = empty_size;
                 f.z = f32(step.z);
             }
         } else {
             if (t_max.y < t_max.z) {
-                t_max.y = t_max.y + t_delta.y;
-                p.y = p.y + step.y;
+                step_size.y = empty_size;
                 f.y = f32(step.y);
             } else {
-                t_max.z = t_max.z + t_delta.z;
-                p.z = p.z + step.z;
+                step_size.z = empty_size;
                 f.z = f32(step.z);
             }
         }
+        t_curr = t_curr + t_delta * floor(step_size);
+        p = p + step * vec3<i32>(step_size);
 
         if (all(p >= vec3<i32>(0, 0, 0)) && all(p < uniforms.size)) {
-            var color = unpack4x8unorm(
-                space.voxels[(p.x * uniforms.size.y + p.y) * uniforms.size.z + p.z]
-            );
-            if (color.a >= 0.5) {
+            let voxel = space.voxels[(p.x * uniforms.size.y + p.y) * uniforms.size.z + p.z];
+            if ((voxel & 0xFF000000u) != 0u) {
                 result.hit = true;
-                result.color = color;
+                result.color = unpack4x8unorm(voxel);
                 result.distance = t;
                 result.normal = f;
                 break;
+            } else {
+                empty_size = f32(voxel);
             }
         } else {
             result.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
@@ -204,7 +205,7 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
 
 [[stage(fragment)]]
 fn fragment_main([[builtin(position)]] pos: vec4<f32>) -> [[location(0)]] vec4<f32> {
-    var ld = 2.0 * (pos.xy - vec2<f32>(3.0 * uniforms.vp_size.x / 4.0, uniforms.vp_size.y / 2.0)) / uniforms.vp_size.y;
+    var ld = 2.0 * (pos.xy - uniforms.vp_size / 2.0) / uniforms.vp_size.y;
     var d = uniforms.looking * normalize(vec3<f32>(ld.x, -ld.y, 1.0));
     return raytrace(uniforms.pos, d);
 }
