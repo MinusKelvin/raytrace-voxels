@@ -64,7 +64,7 @@ impl FragmentRaytracer {
                     (a[2] * 255.0) as u8,
                     255,
                 ],
-                Cell::Empty(d) => d.to_le_bytes(),
+                Cell::Empty([up, down]) => (up | down << 12).to_le_bytes(),
             })
             .collect();
 

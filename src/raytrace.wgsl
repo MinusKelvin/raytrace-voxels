@@ -72,6 +72,7 @@ fn raycast(from: vec3<f32>, d: vec3<f32>, limit: f32) -> RaycastResult {
         }
     }
 
+    let bits_offset = u32(d.y < 0.0) * 12u;
     let step_f = sign(d);
     let t_delta = step_f / d;
     let fudge = (1.0 + step_f) / 2.0;
@@ -116,7 +117,7 @@ fn raycast(from: vec3<f32>, d: vec3<f32>, limit: f32) -> RaycastResult {
                 result.normal = f;
                 break;
             } else {
-                empty_size = f32(voxel);
+                empty_size = f32(extractBits(voxel, bits_offset, 12u));
             }
         } else {
             result.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);

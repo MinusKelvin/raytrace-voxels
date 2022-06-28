@@ -216,7 +216,7 @@ impl Space {
     fn new(size: IVec3) -> Self {
         Space {
             size,
-            voxels: vec![Cell::Empty(u32::MAX); (size.x * size.y * size.z) as usize],
+            voxels: vec![Cell::Empty([u32::MAX; 2]); (size.x * size.y * size.z) as usize],
         }
     }
 
@@ -238,40 +238,73 @@ impl Space {
     }
 
     fn calculate_distances(&mut self) {
-        let mut decreases = VecDeque::new();
+        let mut decreases_up = VecDeque::new();
+        let mut decreases_down = VecDeque::new();
 
         for x in 0..self.size.x {
             for y in 0..self.size.y {
                 for z in 0..self.size.z {
                     let p = IVec3::new(x, y, z);
                     match self.get(p).unwrap() {
-                        Cell::Solid(_) => decreases.push_back((p, 0)),
-                        Cell::Empty(_) => self.set(p, Cell::Empty(u32::MAX)),
+                        Cell::Solid(_) => {
+                            decreases_up.push_back((p, 0));
+                            decreases_down.push_back((p, 0));
+                        }
+                        Cell::Empty(_) => {
+                            self.set(p, Cell::Empty([(self.size.y - y) as u32, y as u32 + 1]))
+                        }
                     }
                 }
             }
         }
 
-        while let Some((p, v)) = decreases.pop_front() {
+        while let Some((p, v)) = decreases_up.pop_front() {
             let propogate;
             match self.get(p).unwrap() {
                 Cell::Solid(_) => {
                     propogate = v == 0;
                 }
-                Cell::Empty(a) => {
-                    propogate = v < a;
+                Cell::Empty([up, down]) => {
+                    propogate = v < up;
                     if propogate {
-                        self.set(p, Cell::Empty(v));
+                        self.set(p, Cell::Empty([v, down]));
                     }
                 }
             }
             if propogate {
                 for x in p.x - 1..=p.x + 1 {
-                    for y in p.y - 1..=p.y + 1 {
+                    for y in p.y - 1..=p.y {
                         for z in p.z - 1..=p.z + 1 {
                             let p = IVec3::new(x, y, z);
-                            if matches!(self.get(p), Some(Cell::Empty(a)) if a > v + 1) {
-                                decreases.push_back((p, v + 1));
+                            if matches!(self.get(p), Some(Cell::Empty([up, _])) if up > v + 1) {
+                                decreases_up.push_back((p, v + 1));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        while let Some((p, v)) = decreases_down.pop_front() {
+            let propogate;
+            match self.get(p).unwrap() {
+                Cell::Solid(_) => {
+                    propogate = v == 0;
+                }
+                Cell::Empty([up, down]) => {
+                    propogate = v < down;
+                    if propogate {
+                        self.set(p, Cell::Empty([up, v]));
+                    }
+                }
+            }
+            if propogate {
+                for x in p.x - 1..=p.x + 1 {
+                    for y in p.y..=p.y + 1 {
+                        for z in p.z - 1..=p.z + 1 {
+                            let p = IVec3::new(x, y, z);
+                            if matches!(self.get(p), Some(Cell::Empty([_, down])) if down > v + 1) {
+                                decreases_down.push_back((p, v + 1));
                             }
                         }
                     }
@@ -284,5 +317,5 @@ impl Space {
 #[derive(Clone, Copy)]
 enum Cell {
     Solid([f32; 3]),
-    Empty(u32),
+    Empty([u32; 2]),
 }

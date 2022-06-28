@@ -242,6 +242,7 @@ fn raycast(space: &Space, from: Vec3, mut d: Vec3) -> Option<([f32; 3], f32, Vec
     }
 
     let step = d.signum();
+    let down = (d.y < 0.0) as bool;
     let t_delta = step / d;
     let fudge = (1.0 + step) / 2.0;
     let mut t_curr = t_delta * (fudge - from.fract() * step - 1.0);
@@ -284,7 +285,7 @@ fn raycast(space: &Space, from: Vec3, mut d: Vec3) -> Option<([f32; 3], f32, Vec
 
         match space.get(p)? {
             Cell::Solid(color) => return Some((color, t, f)),
-            Cell::Empty(space) => empty_size = space as f32,
+            Cell::Empty(space) => empty_size = space[down as usize] as f32,
         }
     }
 }
