@@ -170,7 +170,7 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
 
             var shadow = 0.0;
             for (var i = 0; i < 1; i = i + 1) {
-                let sun = normalize(100.0 * uniforms.sun + random_direction(p));
+                let sun = normalize(1000.0 * uniforms.sun + random_direction(p));
                 let shadowcast = raycast(p - ray.normal * 0.001, sun, 1.0 / 0.0);
                 if (!shadowcast.hit) {
                     shadow = shadow + 1.0;
@@ -184,10 +184,10 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
                 let aocast = raycast(
                     p - ray.normal * 0.001,
                     faceForward(d, reflect(d, ray.normal), -ray.normal),
-                    4.0
+                    24.0
                 );
                 if (aocast.hit) {
-                    ao = ao + aocast.distance / 4.0;
+                    ao = ao + aocast.distance / 24.0;
                 } else {
                     ao = ao + 1.0;
                 }

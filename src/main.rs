@@ -18,12 +18,12 @@ fn main() {
         69, 8, 249, 220, 44, 31, 182, 202, 20, 106, 91, 98,
     ];
     let mut rng = rand::rngs::StdRng::from_seed(seed);
-    for x in 0..256 {
-        for z in 0..256 {
+    for x in 0..space.size.x {
+        for z in 0..space.size.z {
             let h = match rng.gen_bool(0.001) {
-                true => rng.gen_range(96..256),
+                true => rng.gen_range(128..192),
                 false => {
-                    ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 64
+                    ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 96
                 }
             };
             for y in 0..h {
@@ -34,7 +34,7 @@ fn main() {
     space.calculate_distances();
     let mut yaw = 0.95f32;
     let mut pitch = 0.52;
-    let mut camera = Vec3::new(32.44, 85.78, 82.29);
+    let mut camera = (space.size / 2).as_vec3();
     let mut grabbed = false;
     let mut left = false;
     let mut right = false;
@@ -270,7 +270,7 @@ impl Space {
                     for y in p.y - 1..=p.y + 1 {
                         for z in p.z - 1..=p.z + 1 {
                             let p = IVec3::new(x, y, z);
-                            if self.idx(p).is_some() {
+                            if matches!(self.get(p), Some(Cell::Empty(a)) if a > v + 1) {
                                 decreases.push_back((p, v + 1));
                             }
                         }
