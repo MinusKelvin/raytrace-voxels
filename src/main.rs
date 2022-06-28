@@ -20,11 +20,10 @@ fn main() {
     let mut rng = rand::rngs::StdRng::from_seed(seed);
     for x in 0..space.size.x {
         for z in 0..space.size.z {
+            let h =  ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 96;
             let h = match rng.gen_bool(0.001) {
-                true => rng.gen_range(128..192),
-                false => {
-                    ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 96
-                }
+                true => h + 13,
+                false => h
             };
             for y in 0..h {
                 space.set(IVec3::new(x, y, z), Cell::Solid([0.99; 3]));
