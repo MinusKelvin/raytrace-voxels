@@ -16,6 +16,11 @@ struct Uniforms {
     rng: vec3<u32>;
 };
 
+let NUM_AO_RAYS: i32 = 2;
+let AO_RAY_DISTANCE: f32 = 4.0;
+let NUM_SHADOW_RAYS: i32 = 1;
+let P: f32 = 0.01;
+
 struct Space {
     voxels: array<u32>;
 };
@@ -128,8 +133,10 @@ fn raycast(from: vec3<f32>, d: vec3<f32>, limit: f32) -> RaycastResult {
     return result;
 }
 
+var<private> rng: u32 = 0;
 fn pcg3d(b: vec3<u32>) -> vec3<u32> {
-    var v = b
+    rng = rng + 1u;
+    var v = (b + rng)
         * vec3<u32>(1664525u, 1664525u, 1664525u)
         + 1013904223u
         ^ uniforms.rng
@@ -144,15 +151,31 @@ fn pcg3d(b: vec3<u32>) -> vec3<u32> {
     return v;
 }
 
-var<private> rng: u32 = 0;
+fn random(p: vec3<f32>) -> f32 {
+    return f32(pcg3d(bitcast<vec3<u32>>(p)).x >> 16u) / 65536.0;
+}
+
+fn random_cube(p: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(pcg3d(bitcast<vec3<u32>>(p)) >> vec3<u32>(16u)) / 32768.0 - 1.0;
+}
+
 fn random_direction(p: vec3<f32>) -> vec3<f32> {
     loop {
-        rng = rng + 1u;
-        let d = vec3<f32>(pcg3d(
-            bitcast<vec3<u32>>(p) + rng
-        ) % 65536u) / 32768.0 - 1.0;
+        let d = random_cube(p);
         if (dot(d, d) <= 1.0) {
             return normalize(d);
+        }
+    }
+    return vec3<f32>(0.0);
+}
+
+fn random_disk(p: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
+    loop {
+        let s = random_cube(p).xy;
+        if (dot(s, s) <= 1.0) {
+            let tan = normalize(cross(d, vec3<f32>(0.0, 0.0, 1.0)));
+            let bitan = cross(d, tan);
+            return s.x * tan + s.y * bitan;
         }
     }
     return vec3<f32>(0.0);
@@ -163,49 +186,64 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
     var pos = from;
     var dir = d;
     var multiplier = 1.0;
+    let dist = -log(1.0-random(d))/P;
     for (var depth = 0; depth < 4; depth = depth + 1) {
-        let ray = raycast(pos, dir, 1.0 / 0.0);
-        if (ray.hit) {
-            let p = pos + dir * ray.distance;
-            var lighting = max(0.0, dot(uniforms.sun, -ray.normal));
+        var ray = raycast(pos, dir, dist);
+        if (!ray.hit) {
+            ray.distance = dist;
+            ray.color = vec4<f32>(0.25, 0.4, 0.5, 1.0);
+            let n = random_direction(pos + dir * dist);
+            ray.normal = faceForward(n, reflect(n, d), -d);
+        }
+        let p = pos + dir * ray.distance;
+        let in_bounds = all(p >= vec3<f32>(0.0, 0.0, 0.0)) && all(p < vec3<f32>(uniforms.size));
+        var lighting = max(0.0, dot(uniforms.sun, -ray.normal));
 
-            var shadow = 0.0;
-            for (var i = 0; i < 1; i = i + 1) {
-                let sun = normalize(200.0 * uniforms.sun + random_direction(p));
+        var shadow = 0.0;
+        if (in_bounds) {
+            for (var i = 0; i < NUM_SHADOW_RAYS; i = i + 1) {
+                let sun = normalize(200.0 * uniforms.sun + random_disk(p, uniforms.sun));
                 let shadowcast = raycast(p - ray.normal * 0.001, sun, 1.0 / 0.0);
                 if (!shadowcast.hit) {
                     shadow = shadow + 1.0;
                 }
             }
-            lighting = min(lighting, shadow / 1.0);
+            shadow = shadow / f32(NUM_SHADOW_RAYS);
+        } else {
+            shadow = 1.0;
+        }
+        lighting = min(lighting, shadow);
 
-            var ao = 0.0;
-            for (var i = 0; i < 2; i = i + 1) {
+        var ao = 0.0;
+        if (in_bounds) {
+            for (var i = 0; i < NUM_AO_RAYS; i = i + 1) {
                 let d = random_direction(p);
                 let aocast = raycast(
                     p - ray.normal * 0.001,
                     faceForward(d, reflect(d, ray.normal), -ray.normal),
-                    4.0
+                    AO_RAY_DISTANCE
                 );
                 if (aocast.hit) {
-                    ao = ao + aocast.distance / 4.0;
+                    ao = ao + aocast.distance / AO_RAY_DISTANCE;
                 } else {
                     ao = ao + 1.0;
                 }
             }
-            ao = ao / 2.0;
+            ao = ao / f32(NUM_AO_RAYS);
+        } else {
+            ao = 1.0;
+        }
 
-            color = color + ray.color *
-                (lighting / 2.0 + 0.5) *
-                multiplier * ao;
+        color = color + ray.color *
+            (lighting / 2.0 + 0.5) *
+            multiplier * ao;
 
-            if (all(ray.color == vec4<f32>(1.0, 1.0, 1.0, 1.0))) {
-                multiplier = multiplier / 2.0;
-                color = color * (1.0 - multiplier);
-                pos = p - ray.normal * 0.001;
-                dir = reflect(dir, ray.normal);
-                continue;
-            }
+        if (all(ray.color == vec4<f32>(1.0, 1.0, 1.0, 1.0))) {
+            multiplier = multiplier / 2.0;
+            color = color * (1.0 - multiplier);
+            pos = p - ray.normal * 0.001;
+            dir = reflect(dir, ray.normal);
+            continue;
         }
         break;
     }
@@ -216,5 +254,9 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
 fn fragment_main([[builtin(position)]] pos: vec4<f32>) -> [[location(0)]] vec4<f32> {
     var ld = 2.0 * (pos.xy - uniforms.vp_size / 2.0) / uniforms.vp_size.y;
     var d = uniforms.looking * normalize(vec3<f32>(ld.x, -ld.y, 1.0));
-    return raytrace(uniforms.pos, d);
+    var sum = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var i = 0; i < 1; i = i + 1) {
+        sum = sum + raytrace(uniforms.pos, d);
+    }
+    return sum / 1.0;
 }

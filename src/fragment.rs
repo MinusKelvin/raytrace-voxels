@@ -165,7 +165,7 @@ impl FragmentRaytracer {
             ],
             pos: camera,
             size: space.size,
-            sun: Vec3::new(0.1, 1.0, 0.2).normalize(),
+            sun: Vec3::new(0.1, 1.0, 2.2).normalize(),
             vp_size: Vec2::new(gpu.size.width as f32, gpu.size.height as f32),
             rng: thread_rng().gen(),
             _padding0: 0,

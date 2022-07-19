@@ -20,7 +20,7 @@ fn main() {
     let mut rng = rand::rngs::StdRng::from_seed(seed);
     for x in 0..space.size.x {
         for z in 0..space.size.z {
-            let h =  ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 96;
+            let h =  ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 26.0) as i32 + 96;
             let h = match rng.gen_bool(0.001) {
                 true => h + 13,
                 false => h
@@ -31,9 +31,9 @@ fn main() {
         }
     }
     space.calculate_distances();
-    let mut yaw = 0.95f32;
-    let mut pitch = 0.52;
-    let mut camera = (space.size / 2).as_vec3();
+    let mut yaw = -4.72_f32;
+    let mut pitch = 0.12_f32;
+    let mut camera = Vec3::new(2.970, 108.324, 107.297);
     let mut grabbed = false;
     let mut left = false;
     let mut right = false;
@@ -170,7 +170,10 @@ impl WgpuState {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     features: wgpu::Features::empty(),
-                    limits: wgpu::Limits::default(),
+                    limits: wgpu::Limits {
+                        max_storage_buffer_binding_size: 1 << 30,
+                        ..Default::default()
+                    },
                     label: None,
                 },
                 None,
