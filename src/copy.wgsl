@@ -5,14 +5,21 @@ struct VertexOutput {
 var<private> coords: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
     vec2<f32>(-1.0, -1.0),
     vec2<f32>(-1.0,  1.0),
-    vec2<f32>( 0.0, -1.0),
-    vec2<f32>( 0.0, -1.0),
+    vec2<f32>( 1.0, -1.0),
+    vec2<f32>( 1.0, -1.0),
     vec2<f32>(-1.0,  1.0),
-    vec2<f32>( 0.0,  1.0),
+    vec2<f32>( 1.0,  1.0),
 );
 
 [[group(0), binding(0)]]
 var blocks: texture_2d<f32>;
+
+struct Uniforms {
+    samples: f32;
+};
+
+[[group(0), binding(1)]]
+var<uniform> samples: Uniforms;
 
 [[stage(vertex)]]
 fn vertex_main(
@@ -25,5 +32,5 @@ fn vertex_main(
 
 [[stage(fragment)]]
 fn fragment_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {
-    return textureLoad(blocks, vec2<i32>(in.pos.xy), 0);
+    return textureLoad(blocks, vec2<i32>(in.pos.xy), 0) / samples.samples;
 }

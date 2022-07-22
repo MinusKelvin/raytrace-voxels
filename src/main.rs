@@ -31,6 +31,9 @@ fn main() {
             for y in h..h2 {
                 space.set(IVec3::new(x, y, z), Cell::Solid([1.0; 3]));
             }
+            if h > 96 {
+                space.set(IVec3::new(x, 96, z), Cell::Solid([1.0, 0.5, 0.3]));
+            }
         }
     }
     space.calculate_distances();
@@ -88,7 +91,7 @@ fn main() {
             times[framecount % times.len()] = delta;
             let total_time = times.iter().copied().sum::<Duration>();
             let fps = times.len() as f64 / total_time.as_secs_f64();
-            window.set_title(&format!("{:.0} FPS", fps));
+            window.set_title(&format!("{fps:.0} FPS, {} samples", fragment.samples as i32));
             let delta = delta.as_secs_f32();
             last_time = now;
 
@@ -172,7 +175,7 @@ impl WgpuState {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::empty(),
+                    features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
                     limits: wgpu::Limits::default(),
                     label: None,
                 },
