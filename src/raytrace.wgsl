@@ -163,24 +163,39 @@ fn random_direction(n: vec3<f32>) -> vec3<f32> {
     return tangent * ph.x + bitangent * ph.y + n * ph.z;
 }
 
+fn random_sphere() -> vec3<f32> {
+    loop {
+        let d = random() * 2.0 - 1.0;
+        if (dot(d, d) <= 1.0) {
+            return normalize(d);
+        }
+    }
+    return vec3<f32>(0.0, 0.0, 0.0);
+}
+
 fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
     var color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     var light_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
     var pos = from;
     var dir = d;
     for (var depth = 0; depth < 5; depth = depth + 1) {
-        let ray = raycast(pos, dir, 1.0 / 0.0);
-        if (ray.hit) {
-            pos = pos + dir * ray.distance;
+        let dist = -log(1.0-random().x)/0.01;
 
-            dir = random_direction(-ray.normal);
-            light_color = light_color * ray.color;
+        var ray = raycast(pos, dir, dist);
+        if (!ray.hit) {
+            ray.normal = random_sphere();
+            ray.normal = faceForward(ray.normal, ray.normal, d);
+            ray.distance = dist;
+            ray.color = vec4<f32>(0.9, 0.9, 1.0, 1.0);
+        }
 
-            if (all(ray.color == vec4<f32>(1.0, 1.0, 1.0, 1.0))) {
-                color = color + light_color * 4.0;
-            }
-        } else {
-            break;
+        pos = pos + dir * ray.distance;
+
+        dir = random_direction(-ray.normal);
+        light_color = light_color * ray.color;
+
+        if (all(ray.color == vec4<f32>(1.0, 1.0, 1.0, 1.0))) {
+            color = color + light_color * 4.0;
         }
     }
     return color;
