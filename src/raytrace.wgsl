@@ -128,12 +128,11 @@ fn raycast(from: vec3<f32>, d: vec3<f32>, limit: f32) -> RaycastResult {
     return result;
 }
 
-fn pcg3d(b: vec3<u32>) -> vec3<u32> {
-    var v = b
+var<private> rng: vec3<u32>;
+fn pcg3d() -> vec3<u32> {
+    var v = rng
         * vec3<u32>(1664525u, 1664525u, 1664525u)
-        + 1013904223u
-        ^ uniforms.rng
-        ;
+        + 1013904223u;
     v.x = v.x + v.y * v.z;
     v.y = v.y + v.x * v.z;
     v.z = v.z + v.y * v.x;
@@ -141,21 +140,27 @@ fn pcg3d(b: vec3<u32>) -> vec3<u32> {
     v.x = v.x + v.y * v.z;
     v.y = v.y + v.x * v.z;
     v.z = v.z + v.y * v.x;
+    rng = v;
     return v;
 }
 
-var<private> rng: u32 = 0;
-fn random_direction(p: vec3<f32>) -> vec3<f32> {
-    loop {
-        rng = rng + 1u;
-        let d = vec3<f32>(pcg3d(
-            bitcast<vec3<u32>>(p) + rng
-        ) % 65536u) / 32768.0 - 1.0;
-        if (dot(d, d) <= 1.0) {
-            return normalize(d);
-        }
-    }
-    return vec3<f32>(0.0);
+fn random() -> vec3<f32> {
+    return vec3<f32>(pcg3d() % 65536u) / 65536.0;
+}
+
+fn random_direction(n: vec3<f32>) -> vec3<f32> {
+    let rand = random();
+    let r = rand.x;
+    let angle = rand.y * 2.0 * 3.1415926535;
+    let sr = sqrt(r);
+    let p = vec2<f32>(sr * cos(angle), sr * sin(angle));
+    let ph = vec3<f32>(p, sqrt(1.0 - r));
+
+    let t = normalize(rand);
+    let bitangent = cross(t, n);
+    let tangent = cross(bitangent, n);
+
+    return tangent * ph.x + bitangent * ph.y + n * ph.z;
 }
 
 fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
@@ -168,15 +173,12 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
         if (ray.hit) {
             pos = pos + dir * ray.distance;
 
-            let rnd = random_direction(pos);
-            dir = faceForward(rnd, rnd, ray.normal);
+            dir = random_direction(-ray.normal);
             light_color = light_color * ray.color;
 
             if (all(ray.color == vec4<f32>(1.0, 1.0, 1.0, 1.0))) {
-                color = color + light_color * 1.0;
+                color = color + light_color * 4.0;
             }
-
-            light_color = light_color * -dot(dir, ray.normal) * 2.0;
         } else {
             break;
         }
@@ -186,11 +188,15 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
 
 [[stage(fragment)]]
 fn fragment_main([[builtin(position)]] pos: vec4<f32>) -> [[location(0)]] vec4<f32> {
+    rng = uniforms.rng ^ bitcast<vec3<u32>>(pos.xyz);
+
     var ld = 2.0 * (pos.xy - uniforms.vp_size / 2.0) / uniforms.vp_size.y;
-    var d = uniforms.looking * normalize(vec3<f32>(ld.x, -ld.y, 1.0));
+    let px_size = vec2<f32>(dpdx(ld.x), dpdy(ld.y));
     var result = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    for (var i = 0; i < 64; i = i + 1) {
+    for (var i = 0; i < 1; i = i + 1) {
+        let rnd = (random().xy - 0.5) * px_size + ld;
+        var d = uniforms.looking * normalize(vec3<f32>(rnd.x, -rnd.y, 1.0));
         result = result + raytrace(uniforms.pos, d);
     }
-    return result / 64.0;
+    return result / 1.0;
 }
