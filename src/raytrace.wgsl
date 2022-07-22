@@ -160,54 +160,26 @@ fn random_direction(p: vec3<f32>) -> vec3<f32> {
 
 fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
     var color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    var light_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
     var pos = from;
     var dir = d;
-    var multiplier = 1.0;
-    for (var depth = 0; depth < 4; depth = depth + 1) {
+    for (var depth = 0; depth < 5; depth = depth + 1) {
         let ray = raycast(pos, dir, 1.0 / 0.0);
         if (ray.hit) {
-            let p = pos + dir * ray.distance;
-            var lighting = max(0.0, dot(uniforms.sun, -ray.normal));
+            pos = pos + dir * ray.distance;
 
-            var shadow = 0.0;
-            for (var i = 0; i < 1; i = i + 1) {
-                let sun = normalize(200.0 * uniforms.sun + random_direction(p));
-                let shadowcast = raycast(p - ray.normal * 0.001, sun, 1.0 / 0.0);
-                if (!shadowcast.hit) {
-                    shadow = shadow + 1.0;
-                }
-            }
-            lighting = min(lighting, shadow / 1.0);
-
-            var ao = 0.0;
-            for (var i = 0; i < 2; i = i + 1) {
-                let d = random_direction(p);
-                let aocast = raycast(
-                    p - ray.normal * 0.001,
-                    faceForward(d, reflect(d, ray.normal), -ray.normal),
-                    4.0
-                );
-                if (aocast.hit) {
-                    ao = ao + aocast.distance / 4.0;
-                } else {
-                    ao = ao + 1.0;
-                }
-            }
-            ao = ao / 2.0;
-
-            color = color + ray.color *
-                (lighting / 2.0 + 0.5) *
-                multiplier * ao;
+            let rnd = random_direction(pos);
+            dir = faceForward(rnd, rnd, ray.normal);
+            light_color = light_color * ray.color;
 
             if (all(ray.color == vec4<f32>(1.0, 1.0, 1.0, 1.0))) {
-                multiplier = multiplier / 2.0;
-                color = color * (1.0 - multiplier);
-                pos = p - ray.normal * 0.001;
-                dir = reflect(dir, ray.normal);
-                continue;
+                color = color + light_color * 1.0;
             }
+
+            light_color = light_color * -dot(dir, ray.normal) * 2.0;
+        } else {
+            break;
         }
-        break;
     }
     return color;
 }
@@ -216,5 +188,9 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
 fn fragment_main([[builtin(position)]] pos: vec4<f32>) -> [[location(0)]] vec4<f32> {
     var ld = 2.0 * (pos.xy - uniforms.vp_size / 2.0) / uniforms.vp_size.y;
     var d = uniforms.looking * normalize(vec3<f32>(ld.x, -ld.y, 1.0));
-    return raytrace(uniforms.pos, d);
+    var result = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var i = 0; i < 64; i = i + 1) {
+        result = result + raytrace(uniforms.pos, d);
+    }
+    return result / 64.0;
 }
