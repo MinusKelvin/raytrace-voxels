@@ -26,7 +26,7 @@ fn main() {
                 false => h
             };
             for y in 0..h {
-                space.set(IVec3::new(x, y, z), Cell::Solid([0.99; 3]));
+                space.set(IVec3::new(x, y, z), Cell::Solid([0.5; 3]));
             }
             for y in h..h2 {
                 space.set(IVec3::new(x, y, z), Cell::Solid([1.0; 3]));
@@ -36,6 +36,28 @@ fn main() {
             }
         }
     }
+    for i in -2..=16 {
+        for j in -2..=16 {
+            space.set(IVec3::new(i + 100, j + 90, 100), Cell::Solid([0.75; 3]));
+            space.set(IVec3::new(100, j + 90, i + 100), Cell::Solid([0.75; 3]));
+            space.set(IVec3::new(i + 100, j + 90, 116), Cell::Solid([0.75; 3]));
+            space.set(IVec3::new(116, j + 90, i + 100), Cell::Solid([0.75; 3]));
+            space.set(IVec3::new(100 + j, 106, i + 100), Cell::Solid([0.75; 3]));
+        }
+    }
+    space.set(IVec3::new(113, 106, 113), Cell::Empty([0; 2]));
+    space.set(IVec3::new(112, 106, 113), Cell::Empty([0; 2]));
+    space.set(IVec3::new(112, 106, 112), Cell::Empty([0; 2]));
+    space.set(IVec3::new(113, 106, 112), Cell::Empty([0; 2]));
+    space.set(IVec3::new(110, 88, 110), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(111, 88, 110), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(111, 88, 109), Cell::Solid([0.3, 0.5, 1.0]));
+    space.set(IVec3::new(110, 88, 109), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(111, 88, 108), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(110, 88, 108), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(112, 88, 110), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(112, 88, 109), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(112, 88, 108), Cell::Solid([1.0, 0.5, 0.3]));
     space.calculate_distances();
     let mut yaw = 0.95f32;
     let mut pitch = 0.52;

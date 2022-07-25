@@ -148,19 +148,21 @@ fn random() -> vec3<f32> {
     return vec3<f32>(pcg3d() % 65536u) / 65536.0;
 }
 
-fn random_direction(n: vec3<f32>) -> vec3<f32> {
+fn random_disk(n: vec3<f32>) -> vec3<f32> {
     let rand = random();
-    let r = rand.x;
+    let r = sqrt(rand.x);
     let angle = rand.y * 2.0 * 3.1415926535;
-    let sr = sqrt(r);
-    let p = vec2<f32>(sr * cos(angle), sr * sin(angle));
-    let ph = vec3<f32>(p, sqrt(1.0 - r));
+    let p = vec2<f32>(r * cos(angle), r * sin(angle));
 
     let t = normalize(rand);
     let bitangent = cross(t, n);
     let tangent = cross(bitangent, n);
+    return tangent * p.x + bitangent * p.y;
+}
 
-    return tangent * ph.x + bitangent * ph.y + n * ph.z;
+fn random_direction(n: vec3<f32>) -> vec3<f32> {
+    let disk = random_disk(n);
+    return disk + n * sqrt(1.0 - dot(disk, disk));
 }
 
 fn random_sphere() -> vec3<f32> {
@@ -179,14 +181,14 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
     var pos = from;
     var dir = d;
     for (var depth = 0; depth < 5; depth = depth + 1) {
-        let dist = -log(1.0-random().x)/0.01;
+        let dist = -log(1.0-random().x)/0.005;
 
         var ray = raycast(pos, dir, dist);
         if (!ray.hit) {
             ray.normal = random_sphere();
             ray.normal = faceForward(ray.normal, ray.normal, d);
             ray.distance = dist;
-            ray.color = vec4<f32>(0.9, 0.9, 1.0, 1.0);
+            ray.color = vec4<f32>(0.9, 0.95, 1.0, 1.0);
         }
 
         pos = pos + dir * ray.distance;
@@ -194,8 +196,17 @@ fn raytrace(from: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
         dir = random_direction(-ray.normal);
         light_color = light_color * ray.color;
 
+        let sundir = normalize(random_disk(uniforms.sun) + 20.0 * uniforms.sun);
+        let sundot = dot(-ray.normal, sundir);
+        if (sundot > 0.0) {
+            let sunray = raycast(pos, sundir, 1.0 / 0.0);
+            if (!sunray.hit) {
+                color = color + light_color * sundot;
+            }
+        }
+
         if (all(ray.color == vec4<f32>(1.0, 1.0, 1.0, 1.0))) {
-            color = color + light_color * 4.0;
+            color = color + light_color;
         }
     }
     return color;
