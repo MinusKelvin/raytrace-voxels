@@ -12,6 +12,7 @@ pub struct FragmentRaytracer {
     pipeline: wgpu::RenderPipeline,
     uniform_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
+    space_buffer: wgpu::Buffer,
     space_group: wgpu::BindGroup,
     accumulator: wgpu::Texture,
     accumulator_desc: wgpu::TextureDescriptor<'static>,
@@ -32,7 +33,7 @@ impl FragmentRaytracer {
     pub(super) fn new(gpu: &WgpuState, space: &Space) -> Self {
         let shader = gpu
             .device
-            .create_shader_module(&wgpu::include_wgsl!("raytrace.wgsl"));
+            .create_shader_module(wgpu::include_wgsl!("raytrace.wgsl"));
 
         let uniform_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -87,7 +88,7 @@ impl FragmentRaytracer {
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
                 contents: bytemuck::cast_slice(&buffer),
-                usage: wgpu::BufferUsages::STORAGE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             });
 
         let space_group_layout =
@@ -130,16 +131,17 @@ impl FragmentRaytracer {
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: "vertex_main",
+                    entry_point: None,
                     buffers: &[],
+                    compilation_options: Default::default(),
                 },
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: "fragment_main",
-                    targets: &[wgpu::ColorTargetState {
+                    entry_point: None,
+                    targets: &[Some(wgpu::ColorTargetState {
                         format: wgpu::TextureFormat::Rgba32Float,
                         blend: Some(wgpu::BlendState {
                             color: wgpu::BlendComponent {
@@ -150,9 +152,11 @@ impl FragmentRaytracer {
                             alpha: wgpu::BlendComponent::REPLACE,
                         }),
                         write_mask: wgpu::ColorWrites::ALL,
-                    }],
+                    })],
+                    compilation_options: Default::default(),
                 }),
                 multiview: None,
+                cache: None,
             });
 
         let accumulator_desc = wgpu::TextureDescriptor {
@@ -167,6 +171,7 @@ impl FragmentRaytracer {
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba32Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
         };
         let accumulator = gpu.device.create_texture(&accumulator_desc);
 
@@ -232,7 +237,7 @@ impl FragmentRaytracer {
 
         let copy_shader = gpu
             .device
-            .create_shader_module(&wgpu::include_wgsl!("copy.wgsl"));
+            .create_shader_module(wgpu::include_wgsl!("copy.wgsl"));
 
         let copy_pipeline = gpu
             .device
@@ -241,28 +246,32 @@ impl FragmentRaytracer {
                 layout: Some(&cp_layout),
                 vertex: wgpu::VertexState {
                     module: &copy_shader,
-                    entry_point: "vertex_main",
+                    entry_point: None,
                     buffers: &[],
+                    compilation_options: Default::default(),
                 },
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &copy_shader,
-                    entry_point: "fragment_main",
-                    targets: &[wgpu::ColorTargetState {
+                    entry_point: None,
+                    targets: &[Some(wgpu::ColorTargetState {
                         format: gpu.config.format,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
-                    }],
+                    })],
+                    compilation_options: Default::default(),
                 }),
                 multiview: None,
+                cache: None,
             });
 
         FragmentRaytracer {
             pipeline,
             uniform_group,
             uniform_buffer,
+            space_buffer,
             space_group,
             accumulator,
             accumulator_desc,
@@ -277,6 +286,27 @@ impl FragmentRaytracer {
             prev_pos: Vec3::ZERO,
             prev_size: gpu.size,
         }
+    }
+
+    pub(super) fn update_space(&mut self, gpu: &WgpuState, space: &Space) {
+        let buffer: Vec<_> = space
+            .voxels
+            .iter()
+            .map(|&v| match v {
+                Cell::Solid(a) => [
+                    (a[0] * 255.0) as u8,
+                    (a[1] * 255.0) as u8,
+                    (a[2] * 255.0) as u8,
+                    255,
+                ],
+                Cell::Empty([up, down]) => (up | down << 12).to_le_bytes(),
+            })
+            .collect();
+
+        gpu.queue
+            .write_buffer(&self.space_buffer, 0, bytemuck::cast_slice(&buffer));
+
+        self.prev_pitch = f32::NAN;
     }
 
     pub(super) fn render(
@@ -355,15 +385,17 @@ impl FragmentRaytracer {
 
         let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
-            color_attachments: &[wgpu::RenderPassColorAttachment {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &self.accumulator_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
-                    store: true,
+                    store: wgpu::StoreOp::Store,
                 },
-            }],
+            })],
             depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
         });
 
         rp.set_pipeline(&self.pipeline);
@@ -375,15 +407,17 @@ impl FragmentRaytracer {
 
         let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
-            color_attachments: &[wgpu::RenderPassColorAttachment {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &target,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: true,
+                    store: wgpu::StoreOp::Store,
                 },
-            }],
+            })],
             depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
         });
 
         rp.set_pipeline(&self.copy_pipeline);

@@ -1,11 +1,9 @@
-use std::num::NonZeroU32;
-
-use glam::{EulerRot, Vec3, Vec3A};
+use glam::{EulerRot, IVec3, Vec3, Vec3A};
 use image::{EncodableLayout, Rgba};
 use rayon::prelude::*;
 use winit::dpi::PhysicalSize;
 
-use crate::{Space, WgpuState, Cell};
+use crate::{Cell, Space, WgpuState};
 
 pub struct SoftwareRaytracer {
     tex: wgpu::Texture,
@@ -30,6 +28,7 @@ impl SoftwareRaytracer {
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
         });
         let tex_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -68,7 +67,7 @@ impl SoftwareRaytracer {
 
         let copy_shader = gpu
             .device
-            .create_shader_module(&wgpu::include_wgsl!("copy.wgsl"));
+            .create_shader_module(wgpu::include_wgsl!("copy.wgsl"));
 
         let pipeline = gpu
             .device
@@ -77,22 +76,25 @@ impl SoftwareRaytracer {
                 layout: Some(&cp_layout),
                 vertex: wgpu::VertexState {
                     module: &copy_shader,
-                    entry_point: "vertex_main",
+                    entry_point: None,
                     buffers: &[],
+                    compilation_options: Default::default(),
                 },
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &copy_shader,
-                    entry_point: "fragment_main",
-                    targets: &[wgpu::ColorTargetState {
+                    entry_point: None,
+                    targets: &[Some(wgpu::ColorTargetState {
                         format: gpu.config.format,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
-                    }],
+                    })],
+                    compilation_options: Default::default(),
                 }),
                 multiview: None,
+                cache: None,
             });
 
         SoftwareRaytracer {
@@ -128,6 +130,7 @@ impl SoftwareRaytracer {
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
             });
             self.tex_view = self
                 .tex
@@ -188,7 +191,7 @@ impl SoftwareRaytracer {
             raycast_image.as_bytes(),
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: NonZeroU32::new(4 * (self.size.width / 2)),
+                bytes_per_row: Some(4 * (self.size.width / 2)),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
@@ -200,15 +203,17 @@ impl SoftwareRaytracer {
 
         let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
-            color_attachments: &[wgpu::RenderPassColorAttachment {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &target,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: true,
+                    store: wgpu::StoreOp::Store,
                 },
-            }],
+            })],
             depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
         });
 
         rp.set_pipeline(&self.pipeline);
@@ -221,7 +226,11 @@ impl SoftwareRaytracer {
     }
 }
 
-fn raycast(space: &Space, from: Vec3, mut d: Vec3) -> Option<([f32; 3], f32, Vec3)> {
+pub(super) fn raycast(
+    space: &Space,
+    from: Vec3,
+    mut d: Vec3,
+) -> Option<([f32; 3], f32, Vec3, IVec3)> {
     if d.x.abs() < f32::EPSILON {
         d.x = match d.x >= 0.0 {
             true => f32::EPSILON,
@@ -284,7 +293,7 @@ fn raycast(space: &Space, from: Vec3, mut d: Vec3) -> Option<([f32; 3], f32, Vec
         }
 
         match space.get(p)? {
-            Cell::Solid(color) => return Some((color, t, f)),
+            Cell::Solid(color) => return Some((color, t, f, p)),
             Cell::Empty(space) => empty_size = space[down as usize] as f32,
         }
     }
@@ -294,7 +303,7 @@ fn raytrace(space: &Space, from: Vec3, d: Vec3, sun: Vec3, depth_limit: usize) -
     if depth_limit == 0 {
         return [0.0; 3];
     }
-    if let Some((mut c, t, f)) = raycast(space, from, d) {
+    if let Some((mut c, t, f, _)) = raycast(space, from, d) {
         let is_reflective = c == [1.0; 3];
         let p = from + d * t;
         let lighting = sun.dot(-f).max(0.0) / 2.0 + 0.5;

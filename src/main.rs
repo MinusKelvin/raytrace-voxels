@@ -1,15 +1,197 @@
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use fragment::FragmentRaytracer;
 use glam::{EulerRot, IVec3, Mat3, Vec3};
 use rand::prelude::*;
+use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::{Window, WindowBuilder};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
 mod fragment;
 mod software;
+
+struct App {
+    gpu: Option<WgpuState>,
+    window: Option<Arc<Window>>,
+    fragment: Option<FragmentRaytracer>,
+
+    yaw: f32,
+    pitch: f32,
+    camera: Vec3,
+    grabbed: bool,
+
+    left: bool,
+    right: bool,
+    forward: bool,
+    backward: bool,
+    up: bool,
+    down: bool,
+
+    last_time: Instant,
+    times: [Duration; 1000],
+    framecount: usize,
+
+    space: Space,
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let window = Arc::new(
+            event_loop
+                .create_window(WindowAttributes::default())
+                .unwrap(),
+        );
+
+        let gpu = pollster::block_on(WgpuState::new(&window));
+
+        let fragment = FragmentRaytracer::new(&gpu, &self.space);
+
+        self.gpu = Some(gpu);
+        self.window = Some(window);
+        self.fragment = Some(fragment);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let Some(gpu) = self.gpu.as_mut() else { return };
+        let Some(fragment) = self.fragment.as_mut() else {
+            return;
+        };
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => gpu.resize(size),
+            WindowEvent::KeyboardInput { event, .. } => {
+                let state = event.state == ElementState::Pressed;
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::Escape) if state => {
+                        self.grabbed ^= true;
+                        window
+                            .set_cursor_grab(match self.grabbed {
+                                true => CursorGrabMode::Locked,
+                                false => CursorGrabMode::None,
+                            })
+                            .unwrap();
+                        window.set_cursor_visible(!self.grabbed);
+                    }
+                    PhysicalKey::Code(KeyCode::KeyA) => self.left = state,
+                    PhysicalKey::Code(KeyCode::KeyD) => self.right = state,
+                    PhysicalKey::Code(KeyCode::KeyW) => self.forward = state,
+                    PhysicalKey::Code(KeyCode::KeyS) => self.backward = state,
+                    PhysicalKey::Code(KeyCode::Space) => self.up = state,
+                    PhysicalKey::Code(KeyCode::ShiftLeft) => self.down = state,
+                    _ => {}
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button,
+                ..
+            } => {
+                let looking = glam::Mat3A::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0);
+                let result = software::raycast(&self.space, self.camera, looking.mul_vec3(Vec3::Z));
+                if let Some((_, _, n, p)) = result {
+                    match button {
+                        MouseButton::Left => self.space.set(p, Cell::Empty([0, 0])),
+                        MouseButton::Right => {
+                            let np = p - n.as_ivec3();
+                            if self.space.idx(np).is_some() {
+                                self.space.set(np, Cell::Solid([1.0; 3]));
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    self.space.calculate_distances();
+                    fragment.update_space(&gpu, &self.space);
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                let now = std::time::Instant::now();
+                let delta = now - self.last_time;
+                self.times[self.framecount % self.times.len()] = delta;
+                let total_time = self.times.iter().copied().sum::<Duration>();
+                let fps = self.times.len() as f64 / total_time.as_secs_f64();
+                window.set_title(&format!(
+                    "{fps:.0} FPS, {} samples",
+                    fragment.samples as i32
+                ));
+                let delta = delta.as_secs_f32();
+                self.last_time = now;
+
+                if self.framecount == 5000 {
+                    println!("{total_time:.2?}");
+                }
+                self.framecount += 1;
+
+                let mut d = Vec3::ZERO;
+                if self.left {
+                    d.x -= 1.0;
+                }
+                if self.right {
+                    d.x += 1.0;
+                }
+                if self.forward {
+                    d.z += 1.0;
+                }
+                if self.backward {
+                    d.z -= 1.0;
+                }
+                let dir = Mat3::from_euler(EulerRot::YXZ, self.yaw, 0.0, 0.0);
+                self.camera += dir * d.normalize_or_zero() * delta * 10.0;
+
+                self.camera.y += (self.up as i32 - self.down as i32) as f32 * delta * 10.0;
+
+                match gpu.surface.get_current_texture() {
+                    Ok(frame) => {
+                        let view = frame
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor::default());
+
+                        // let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
+                        let fg_cmd = fragment.render(
+                            &gpu,
+                            &view,
+                            &self.space,
+                            self.camera,
+                            self.yaw,
+                            self.pitch,
+                        );
+
+                        gpu.queue.submit([/*sw_cmd,*/ fg_cmd]);
+
+                        window.pre_present_notify();
+                        frame.present();
+
+                        window.request_redraw();
+                    }
+                    Err(wgpu::SurfaceError::Lost) => gpu.resize(gpu.size),
+                    Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
+                    Err(_) => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        match event {
+            DeviceEvent::MouseMotion { delta } => {
+                if self.grabbed {
+                    self.yaw += delta.0 as f32 * 0.01;
+                    self.pitch += delta.1 as f32 * 0.01;
+                }
+            }
+            _ => {}
+        }
+    }
+}
 
 fn main() {
     let mut space = Space::new(IVec3::splat(256));
@@ -18,22 +200,32 @@ fn main() {
         69, 8, 249, 220, 44, 31, 182, 202, 20, 106, 91, 98,
     ];
     let mut rng = rand::rngs::StdRng::from_seed(seed);
-    for x in 0..space.size.x {
-        for z in 0..space.size.z {
+    for x in 1..space.size.x-1 {
+        for z in 1..space.size.z-1 {
             let h = ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 96;
             let h2 = match rng.gen_bool(0.001) {
-                true => h + 13,
-                false => h
+                true => h + 15,
+                false => h,
             };
             for y in 0..h {
                 space.set(IVec3::new(x, y, z), Cell::Solid([0.5; 3]));
             }
-            for y in h..h2 {
-                space.set(IVec3::new(x, y, z), Cell::Solid([1.0; 3]));
+            if h != h2 {
+                space.set(IVec3::new(x, h2-1, z), Cell::Solid([1.0; 3]));
+                space.set(IVec3::new(x, h2, z), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x-1, h2-2, z), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x+1, h2-2, z), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x, h2-2, z-1), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x, h2-2, z+1), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x-1, h2-1, z), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x+1, h2-1, z), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x, h2-1, z-1), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x, h2-1, z+1), Cell::Solid([0.75; 3]));
             }
             if h > 96 {
                 space.set(IVec3::new(x, 96, z), Cell::Solid([1.0, 0.5, 0.3]));
             }
+            // space.set(IVec3::new(x, 255, z), Cell::Solid([1.0; 3]));
         }
     }
     for i in -2..=16 {
@@ -43,12 +235,17 @@ fn main() {
             space.set(IVec3::new(i + 100, j + 90, 116), Cell::Solid([0.75; 3]));
             space.set(IVec3::new(116, j + 90, i + 100), Cell::Solid([0.75; 3]));
             space.set(IVec3::new(100 + j, 106, i + 100), Cell::Solid([0.75; 3]));
+            space.set(IVec3::new(100 + j, 90, i + 100), Cell::Solid([0.75; 3]));
         }
     }
-    space.set(IVec3::new(113, 106, 113), Cell::Empty([0; 2]));
-    space.set(IVec3::new(112, 106, 113), Cell::Empty([0; 2]));
-    space.set(IVec3::new(112, 106, 112), Cell::Empty([0; 2]));
-    space.set(IVec3::new(113, 106, 112), Cell::Empty([0; 2]));
+    // space.set(IVec3::new(113, 106, 113), Cell::Empty([0; 2]));
+    // space.set(IVec3::new(112, 106, 113), Cell::Empty([0; 2]));
+    // space.set(IVec3::new(112, 106, 112), Cell::Empty([0; 2]));
+    // space.set(IVec3::new(113, 106, 112), Cell::Empty([0; 2]));
+    space.set(IVec3::new(113, 107, 113), Cell::Solid([1.0; 3]));
+    space.set(IVec3::new(112, 107, 113), Cell::Solid([1.0; 3]));
+    space.set(IVec3::new(112, 107, 112), Cell::Solid([1.0; 3]));
+    space.set(IVec3::new(113, 107, 112), Cell::Solid([1.0; 3]));
     space.set(IVec3::new(110, 88, 110), Cell::Solid([1.0, 0.5, 0.3]));
     space.set(IVec3::new(111, 88, 110), Cell::Solid([1.0, 0.5, 0.3]));
     space.set(IVec3::new(111, 88, 109), Cell::Solid([0.3, 0.5, 1.0]));
@@ -59,120 +256,38 @@ fn main() {
     space.set(IVec3::new(112, 88, 109), Cell::Solid([1.0, 0.5, 0.3]));
     space.set(IVec3::new(112, 88, 108), Cell::Solid([1.0, 0.5, 0.3]));
     space.calculate_distances();
-    let mut yaw = 0.95f32;
-    let mut pitch = 0.52;
-    let mut camera = (space.size / 2).as_vec3();
-    let mut grabbed = false;
-    let mut left = false;
-    let mut right = false;
-    let mut forward = false;
-    let mut backward = false;
-    let mut up = false;
-    let mut down = false;
 
-    let mut times = [Duration::ZERO; 1000];
-    let mut framecount = 0;
+    EventLoop::new()
+        .unwrap()
+        .run_app(&mut App {
+            window: None,
+            gpu: None,
 
-    let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop).unwrap();
+            yaw: 0.95f32,
+            pitch: 0.52,
+            camera: (space.size / 2).as_vec3(),
+            grabbed: false,
+            left: false,
+            right: false,
+            forward: false,
+            backward: false,
+            up: false,
+            down: false,
 
-    let mut gpu = pollster::block_on(WgpuState::new(&window));
+            last_time: Instant::now(),
+            times: [Duration::ZERO; 1000],
+            framecount: 0,
+
+            space,
+            fragment: None,
+        })
+        .unwrap();
 
     // let mut software = software::SoftwareRaytracer::new(&gpu, &space);
-    let mut fragment = fragment::FragmentRaytracer::new(&gpu, &space);
-
-    let mut last_time = std::time::Instant::now();
-
-    event_loop.run(move |event, _, cf| match event {
-        Event::WindowEvent { event, .. } => match event {
-            WindowEvent::CloseRequested => *cf = ControlFlow::Exit,
-            WindowEvent::Resized(size) => gpu.resize(size),
-            WindowEvent::ScaleFactorChanged { new_inner_size, .. } => gpu.resize(*new_inner_size),
-            WindowEvent::KeyboardInput { input, .. } => {
-                let state = input.state == ElementState::Pressed;
-                match input.virtual_keycode {
-                    Some(VirtualKeyCode::Escape) if state => {
-                        grabbed ^= true;
-                        window.set_cursor_grab(grabbed).unwrap();
-                        window.set_cursor_visible(!grabbed);
-                    }
-                    Some(VirtualKeyCode::A) => left = state,
-                    Some(VirtualKeyCode::D) => right = state,
-                    Some(VirtualKeyCode::W) => forward = state,
-                    Some(VirtualKeyCode::S) => backward = state,
-                    Some(VirtualKeyCode::Space) => up = state,
-                    Some(VirtualKeyCode::LShift) => down = state,
-                    _ => {}
-                }
-            }
-            _ => {}
-        },
-        Event::MainEventsCleared => {
-            let now = std::time::Instant::now();
-            let delta = now - last_time;
-            times[framecount % times.len()] = delta;
-            let total_time = times.iter().copied().sum::<Duration>();
-            let fps = times.len() as f64 / total_time.as_secs_f64();
-            window.set_title(&format!("{fps:.0} FPS, {} samples", fragment.samples as i32));
-            let delta = delta.as_secs_f32();
-            last_time = now;
-
-            if framecount == 5000 {
-                println!("{total_time:.2?}");
-            }
-            framecount += 1;
-
-            let mut d = Vec3::ZERO;
-            if left {
-                d.x -= 1.0;
-            }
-            if right {
-                d.x += 1.0;
-            }
-            if forward {
-                d.z += 1.0;
-            }
-            if backward {
-                d.z -= 1.0;
-            }
-            let dir = Mat3::from_euler(EulerRot::YXZ, yaw, 0.0, 0.0);
-            camera += dir * d.normalize_or_zero() * delta * 10.0;
-
-            camera.y += (up as i32 - down as i32) as f32 * delta * 10.0;
-
-            match gpu.surface.get_current_texture() {
-                Ok(frame) => {
-                    let view = frame
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
-
-                    // let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
-                    let fg_cmd = fragment.render(&gpu, &view, &space, camera, yaw, pitch);
-
-                    gpu.queue.submit([/*sw_cmd,*/ fg_cmd]);
-
-                    frame.present();
-                }
-                Err(wgpu::SurfaceError::Lost) => gpu.resize(gpu.size),
-                Err(wgpu::SurfaceError::OutOfMemory) => *cf = ControlFlow::Exit,
-                Err(_) => {}
-            }
-        }
-        Event::DeviceEvent { event, .. } => match event {
-            DeviceEvent::MouseMotion { delta } => {
-                if grabbed {
-                    yaw += delta.0 as f32 * 0.01;
-                    pitch += delta.1 as f32 * 0.01;
-                }
-            }
-            _ => {}
-        },
-        _ => {}
-    })
 }
 
 struct WgpuState {
-    surface: wgpu::Surface,
+    surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -180,11 +295,11 @@ struct WgpuState {
 }
 
 impl WgpuState {
-    async fn new(window: &Window) -> Self {
+    async fn new(window: &Arc<Window>) -> Self {
         let size = window.inner_size();
 
-        let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
-        let surface = unsafe { instance.create_surface(window) };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let surface = instance.create_surface(window.clone()).unwrap();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -197,9 +312,10 @@ impl WgpuState {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
-                    limits: wgpu::Limits::default(),
+                    required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+                    required_limits: wgpu::Limits::default(),
                     label: None,
+                    memory_hints: wgpu::MemoryHints::Performance,
                 },
                 None,
             )
@@ -208,10 +324,19 @@ impl WgpuState {
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface.get_preferred_format(&adapter).unwrap(),
+            // format: wgpu::TextureFormat::Rgba16Float,
+            format: surface
+                .get_capabilities(&adapter)
+                .formats
+                .into_iter()
+                .find(|s| s.is_srgb())
+                .unwrap(),
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::Mailbox,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
         };
         surface.configure(&device, &config);
 
