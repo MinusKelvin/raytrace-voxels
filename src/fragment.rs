@@ -14,7 +14,7 @@ pub struct FragmentRaytracer {
     uniform_buffer: wgpu::Buffer,
     space_buffer: wgpu::Buffer,
     space_group: wgpu::BindGroup,
-    // wl_to_color: wgpu::Texture,
+    wl_to_color_group: wgpu::BindGroup,
     accumulator: wgpu::Texture,
     accumulator_desc: wgpu::TextureDescriptor<'static>,
     accumulator_view: wgpu::TextureView,
@@ -70,62 +70,76 @@ impl FragmentRaytracer {
             }],
         });
 
-        // let wl_to_color_image = image::load_from_memory(include_bytes!("wl-to-color.png"))
-        //     .unwrap()
-        //     .to_rgba8();
+        let wl_to_color_image = image::load_from_memory(include_bytes!("wl-to-color.png"))
+            .unwrap()
+            .to_rgba8();
 
-        // let wl_to_color_texture = gpu.device.create_texture_with_data(
-        //     &gpu.queue,
-        //     &wgpu::TextureDescriptor {
-        //         label: None,
-        //         size: wgpu::Extent3d {
-        //             width: wl_to_color_image.width(),
-        //             height: 1,
-        //             depth_or_array_layers: 1,
-        //         },
-        //         mip_level_count: 1,
-        //         sample_count: 1,
-        //         dimension: wgpu::TextureDimension::D1,
-        //         format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        //         usage: wgpu::TextureUsages::TEXTURE_BINDING,
-        //         view_formats: &[],
-        //     },
-        //     wgpu::util::TextureDataOrder::LayerMajor,
-        //     &wl_to_color_image,
-        // );
+        let wl_to_color_texture = gpu.device.create_texture_with_data(
+            &gpu.queue,
+            &wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: wl_to_color_image.width(),
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D1,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &wl_to_color_image,
+        );
 
-        // let wl_to_color_group_layout =
-        //     gpu.device
-        //         .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        //             label: None,
-        //             entries: &[
-        //                 wgpu::BindGroupLayoutEntry {
-        //                     binding: 0,
-        //                     visibility: wgpu::ShaderStages::FRAGMENT,
-        //                     ty: wgpu::BindingType::Texture {
-        //                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
-        //                         view_dimension: wgpu::TextureViewDimension::D1,
-        //                         multisampled: false,
-        //                     },
-        //                     count: None,
-        //                 },
-        //                 wgpu::BindGroupLayoutEntry {
-        //                     binding: 1,
-        //                     visibility: wgpu::ShaderStages::FRAGMENT,
-        //                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        //                     count: None,
-        //                 },
-        //             ],
-        //         });
+        let wl_to_color_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
-        // let wl_to_color_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        //     label: None,
-        //     layout: &wl_to_color_group_layout,
-        //     entries: &[wgpu::BindGroupEntry {
-        //         binding: 0,
-        //         resource: wgpu::BindingResource::TextureView(),
-        //     }],
-        // });
+        let wl_to_color_group_layout =
+            gpu.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: None,
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D1,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                    ],
+                });
+
+        let wl_to_color_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &wl_to_color_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        &wl_to_color_texture.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&wl_to_color_sampler),
+                },
+            ],
+        });
 
         let buffer: Vec<_> = space
             .voxels
@@ -178,7 +192,11 @@ impl FragmentRaytracer {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[&uniform_group_layout, &space_group_layout],
+                bind_group_layouts: &[
+                    &uniform_group_layout,
+                    &space_group_layout,
+                    &wl_to_color_group_layout,
+                ],
                 push_constant_ranges: &[],
             });
 
@@ -331,6 +349,7 @@ impl FragmentRaytracer {
             uniform_buffer,
             space_buffer,
             space_group,
+            wl_to_color_group,
             accumulator,
             accumulator_desc,
             accumulator_view,
@@ -438,8 +457,11 @@ impl FragmentRaytracer {
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         self.samples += 1;
-        gpu.queue
-            .write_buffer(&self.samples_buffer, 0, bytemuck::bytes_of(&(self.samples as f32)));
+        gpu.queue.write_buffer(
+            &self.samples_buffer,
+            0,
+            bytemuck::bytes_of(&(self.samples as f32)),
+        );
 
         let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -459,6 +481,7 @@ impl FragmentRaytracer {
         rp.set_pipeline(&self.pipeline);
         rp.set_bind_group(0, &self.uniform_group, &[]);
         rp.set_bind_group(1, &self.space_group, &[]);
+        rp.set_bind_group(2, &self.wl_to_color_group, &[]);
         rp.draw(0..6, 0..1);
 
         drop(rp);

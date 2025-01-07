@@ -19,8 +19,8 @@ mod svo;
 
 struct App {
     gpu: Option<WgpuState>,
-    window: Option<Arc<Window>>,
     fragment: Option<FragmentRaytracer>,
+    window: Option<Arc<Window>>,
 
     yaw: f32,
     pitch: f32,

@@ -26,8 +26,10 @@ var<uniform> uniforms: Uniforms;
 @group(1) @binding(0)
 var<storage, read> space: Space;
 
-// @group(2) @binding(0)
-// var<uniform> wl_to_color: sampler2d
+@group(2) @binding(0)
+var wl_to_color_tex: texture_1d<f32>;
+@group(2) @binding(1)
+var wl_to_color_samp: sampler;
 
 @vertex
 fn vertex_main(
@@ -180,18 +182,20 @@ fn random_sphere() -> vec3<f32> {
 }
 
 fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec4<f32> {
+    let density = 1 / (16 * 200 * (wavelength + 0.25));
     var color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    var light_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    var light_color = textureSample(wl_to_color_tex, wl_to_color_samp, wavelength)
+        * 1.0 / ((wavelength + 1.0) * (wavelength + 1.0) * (wavelength + 1.0) * (exp(0.1 / (wavelength + 1.0)) - 1.0)) * vec4<f32>(1.0, 0.8, 1.0, 1.0);
     var pos = start;
     var dir = d;
     for (var depth = 0; depth < 5; depth = depth + 1) {
-        let dist = -log(1.0-random().x)/0.01;
+        let dist = -log(1.0-random().x)/density;
 
-        let hit_y = pos.y + dir.y * dist;
+        let hit = pos + dir * dist - vec3<f32>(uniforms.size) / 2.0;
 
         var ray = raycast(pos, dir, dist);
         if (!ray.hit) {
-            if (hit_y > 150.0) {
+            if (hit.y > 500.0) {
                 if (dot(dir, uniforms.sun) > 0.99996) {
                     color += light_color * 10000.0;
                 }
@@ -233,7 +237,7 @@ fn fragment_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         let rng = random();
         let rnd = (rng.xy - 0.5) * px_size + ld;
         var d = uniforms.looking * normalize(vec3<f32>(rnd.x, -rnd.y, 1.0));
-        result = result + raytrace(uniforms.pos, d, rng.z * 4.2);
+        result = result + raytrace(uniforms.pos, d, rng.z);
     }
     return result / 1.0;
 }
