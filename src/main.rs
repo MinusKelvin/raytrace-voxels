@@ -5,15 +5,17 @@ use std::time::{Duration, Instant};
 use fragment::FragmentRaytracer;
 use glam::{EulerRot, IVec3, Mat3, Vec3};
 use rand::prelude::*;
+use svo::SvoSpace;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, StartCause, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
 mod fragment;
 mod software;
+mod svo;
 
 struct App {
     gpu: Option<WgpuState>,
@@ -33,7 +35,7 @@ struct App {
     down: bool,
 
     last_time: Instant,
-    times: [Duration; 1000],
+    times: [Duration; 250],
     framecount: usize,
 
     space: Space,
@@ -43,7 +45,7 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = Arc::new(
             event_loop
-                .create_window(WindowAttributes::default())
+                .create_window(WindowAttributes::default().with_inner_size(PhysicalSize::new(853, 480)))
                 .unwrap(),
         );
 
@@ -54,6 +56,82 @@ impl ApplicationHandler for App {
         self.gpu = Some(gpu);
         self.window = Some(window);
         self.fragment = Some(fragment);
+
+        event_loop.set_control_flow(ControlFlow::Poll);
+    }
+
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        if cause != StartCause::Poll {
+            return;
+        }
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let Some(gpu) = self.gpu.as_mut() else { return };
+        let Some(fragment) = self.fragment.as_mut() else {
+            return;
+        };
+
+        let now = std::time::Instant::now();
+        let delta = now - self.last_time;
+        self.times[self.framecount % self.times.len()] = delta;
+        let total_time = self.times.iter().copied().sum::<Duration>();
+        let fps = self.times.len() as f64 / total_time.as_secs_f64();
+        window.set_title(&format!(
+            "{fps:.0} FPS, {} samples",
+            fragment.samples as i32
+        ));
+        let delta = delta.as_secs_f32();
+        self.last_time = now;
+
+        if self.framecount == 5000 {
+            println!(
+                "{total_time:.2?} {:?} {} {}",
+                self.camera, self.yaw, self.pitch
+            );
+        }
+        self.framecount += 1;
+
+        let mut d = Vec3::ZERO;
+        if self.left {
+            d.x -= 1.0;
+        }
+        if self.right {
+            d.x += 1.0;
+        }
+        if self.forward {
+            d.z += 1.0;
+        }
+        if self.backward {
+            d.z -= 1.0;
+        }
+        let dir = Mat3::from_euler(EulerRot::YXZ, self.yaw, 0.0, 0.0);
+        if self.grabbed {
+            self.camera += dir * d.normalize_or_zero() * delta * 10.0;
+            self.camera.y += (self.up as i32 - self.down as i32) as f32 * delta * 10.0;
+        }
+
+        match gpu.surface.get_current_texture() {
+            Ok(frame) => {
+                let view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+
+                // let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
+                let fg_cmd =
+                    fragment.render(&gpu, &view, &self.space, self.camera, self.yaw, self.pitch);
+
+                gpu.queue.submit([/*sw_cmd,*/ fg_cmd]);
+
+                window.pre_present_notify();
+                frame.present();
+
+                window.request_redraw();
+            }
+            Err(wgpu::SurfaceError::Lost) => gpu.resize(gpu.size),
+            Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
+            Err(_) => {}
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
@@ -67,6 +145,12 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => gpu.resize(size),
+            WindowEvent::ScaleFactorChanged {
+                mut inner_size_writer,
+                ..
+            } => {
+                inner_size_writer.request_inner_size(gpu.size);
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let state = event.state == ElementState::Pressed;
                 match event.physical_key {
@@ -93,7 +177,7 @@ impl ApplicationHandler for App {
                 state: ElementState::Pressed,
                 button,
                 ..
-            } => {
+            } if self.grabbed => {
                 let looking = glam::Mat3A::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0);
                 let result = software::raycast(&self.space, self.camera, looking.mul_vec3(Vec3::Z));
                 if let Some((_, _, n, p)) = result {
@@ -110,70 +194,6 @@ impl ApplicationHandler for App {
 
                     self.space.calculate_distances();
                     fragment.update_space(&gpu, &self.space);
-                }
-            }
-            WindowEvent::RedrawRequested => {
-                let now = std::time::Instant::now();
-                let delta = now - self.last_time;
-                self.times[self.framecount % self.times.len()] = delta;
-                let total_time = self.times.iter().copied().sum::<Duration>();
-                let fps = self.times.len() as f64 / total_time.as_secs_f64();
-                window.set_title(&format!(
-                    "{fps:.0} FPS, {} samples",
-                    fragment.samples as i32
-                ));
-                let delta = delta.as_secs_f32();
-                self.last_time = now;
-
-                if self.framecount == 5000 {
-                    println!("{total_time:.2?}");
-                }
-                self.framecount += 1;
-
-                let mut d = Vec3::ZERO;
-                if self.left {
-                    d.x -= 1.0;
-                }
-                if self.right {
-                    d.x += 1.0;
-                }
-                if self.forward {
-                    d.z += 1.0;
-                }
-                if self.backward {
-                    d.z -= 1.0;
-                }
-                let dir = Mat3::from_euler(EulerRot::YXZ, self.yaw, 0.0, 0.0);
-                self.camera += dir * d.normalize_or_zero() * delta * 10.0;
-
-                self.camera.y += (self.up as i32 - self.down as i32) as f32 * delta * 10.0;
-
-                match gpu.surface.get_current_texture() {
-                    Ok(frame) => {
-                        let view = frame
-                            .texture
-                            .create_view(&wgpu::TextureViewDescriptor::default());
-
-                        // let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
-                        let fg_cmd = fragment.render(
-                            &gpu,
-                            &view,
-                            &self.space,
-                            self.camera,
-                            self.yaw,
-                            self.pitch,
-                        );
-
-                        gpu.queue.submit([/*sw_cmd,*/ fg_cmd]);
-
-                        window.pre_present_notify();
-                        frame.present();
-
-                        window.request_redraw();
-                    }
-                    Err(wgpu::SurfaceError::Lost) => gpu.resize(gpu.size),
-                    Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                    Err(_) => {}
                 }
             }
             _ => {}
@@ -200,30 +220,30 @@ fn main() {
         69, 8, 249, 220, 44, 31, 182, 202, 20, 106, 91, 98,
     ];
     let mut rng = rand::rngs::StdRng::from_seed(seed);
-    for x in 1..space.size.x-1 {
-        for z in 1..space.size.z-1 {
-            let h = ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 96;
-            let h2 = match rng.gen_bool(0.001) {
-                true => h + 15,
-                false => h,
-            };
+    for x in 1..space.size.x - 1 {
+        for z in 1..space.size.z - 1 {
+            let h = ((x as f32 / 10.0).sin() * 6.0 + (z as f32 / 10.0).sin() * 20.0) as i32 + 96;
+            // let h2 = match rng.gen_bool(0.001) {
+            //     true => h + 15,
+            //     false => h,
+            // };
             for y in 0..h {
                 space.set(IVec3::new(x, y, z), Cell::Solid([0.5; 3]));
             }
-            if h != h2 {
-                space.set(IVec3::new(x, h2-1, z), Cell::Solid([1.0; 3]));
-                space.set(IVec3::new(x, h2, z), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x-1, h2-2, z), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x+1, h2-2, z), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x, h2-2, z-1), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x, h2-2, z+1), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x-1, h2-1, z), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x+1, h2-1, z), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x, h2-1, z-1), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x, h2-1, z+1), Cell::Solid([0.75; 3]));
-            }
-            if h > 96 {
-                space.set(IVec3::new(x, 96, z), Cell::Solid([1.0, 0.5, 0.3]));
+            // if h != h2 {
+            //     space.set(IVec3::new(x, h2 - 1, z), Cell::Solid([1.0; 3]));
+            //     space.set(IVec3::new(x, h2, z), Cell::Solid([0.75; 3]));
+            //     space.set(IVec3::new(x - 1, h2 - 2, z), Cell::Solid([0.75; 3]));
+            //     space.set(IVec3::new(x + 1, h2 - 2, z), Cell::Solid([0.75; 3]));
+            //     space.set(IVec3::new(x, h2 - 2, z - 1), Cell::Solid([0.75; 3]));
+            //     space.set(IVec3::new(x, h2 - 2, z + 1), Cell::Solid([0.75; 3]));
+            //     space.set(IVec3::new(x - 1, h2 - 1, z), Cell::Solid([0.75; 3]));
+            //     space.set(IVec3::new(x + 1, h2 - 1, z), Cell::Solid([0.75; 3]));
+            //     space.set(IVec3::new(x, h2 - 1, z - 1), Cell::Solid([0.75; 3]));
+            //     space.set(IVec3::new(x, h2 - 1, z + 1), Cell::Solid([0.75; 3]));
+            // }
+            if h > 111 {
+                space.set(IVec3::new(x, 111, z), Cell::Solid([1.0, 0.5, 0.3]));
             }
             // space.set(IVec3::new(x, 255, z), Cell::Solid([1.0; 3]));
         }
@@ -257,15 +277,51 @@ fn main() {
     space.set(IVec3::new(112, 88, 108), Cell::Solid([1.0, 0.5, 0.3]));
     space.calculate_distances();
 
+    // println!("making svo");
+    // let t = Instant::now();
+    // let mut svo_space = SvoSpace::new(space.size);
+    // for x in 0..space.size.x {
+    //     for y in 0..space.size.y {
+    //         for z in 0..space.size.z {
+    //             let p = IVec3::new(x, y, z);
+    //             let v = match space.get(p) {
+    //                 Some(Cell::Solid(v)) => Some(v),
+    //                 Some(Cell::Empty(_)) => None,
+    //                 None => None,
+    //             };
+    //             svo_space.set(p, v);
+    //         }
+    //     }
+    // }
+    // println!("checking svo {:.3?}", t.elapsed());
+    // let t = Instant::now();
+    // for x in 0..space.size.x {
+    //     for y in 0..space.size.y {
+    //         for z in 0..space.size.z {
+    //             let p = IVec3::new(x, y, z);
+    //             let v = match space.get(p) {
+    //                 Some(Cell::Solid(v)) => Some(v),
+    //                 Some(Cell::Empty(_)) => None,
+    //                 None => None,
+    //             };
+    //             assert_eq!(v, svo_space.get(p));
+    //         }
+    //     }
+    // }
+    // println!("all g {:.2?}", t.elapsed());
+
+    // println!("array size: {}", space.mem_usage());
+    // println!("  svo size: {}", svo_space.mem_usage());
+
     EventLoop::new()
         .unwrap()
         .run_app(&mut App {
             window: None,
             gpu: None,
 
-            yaw: 0.95f32,
-            pitch: 0.52,
-            camera: (space.size / 2).as_vec3(),
+            yaw: 0.62996435,
+            pitch: 0.09000018,
+            camera: Vec3::new(34.811836, 114.02207, 74.028244),
             grabbed: false,
             left: false,
             right: false,
@@ -275,7 +331,7 @@ fn main() {
             down: false,
 
             last_time: Instant::now(),
-            times: [Duration::ZERO; 1000],
+            times: [Duration::ZERO; 250],
             framecount: 0,
 
             space,
@@ -370,6 +426,10 @@ impl Space {
             size,
             voxels: vec![Cell::Empty([u32::MAX; 2]); (size.x * size.y * size.z) as usize],
         }
+    }
+
+    fn mem_usage(&self) -> usize {
+        self.voxels.capacity() * std::mem::size_of::<Cell>()
     }
 
     fn idx(&self, p: IVec3) -> Option<usize> {

@@ -26,6 +26,9 @@ var<uniform> uniforms: Uniforms;
 @group(1) @binding(0)
 var<storage, read> space: Space;
 
+// @group(2) @binding(0)
+// var<uniform> wl_to_color: sampler2d
+
 @vertex
 fn vertex_main(
     @builtin(vertex_index) vertex_index: u32
@@ -176,7 +179,7 @@ fn random_sphere() -> vec3<f32> {
     return vec3<f32>(0.0, 0.0, 0.0);
 }
 
-fn raytrace(start: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
+fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec4<f32> {
     var color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     var light_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
     var pos = start;
@@ -184,11 +187,19 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
     for (var depth = 0; depth < 5; depth = depth + 1) {
         let dist = -log(1.0-random().x)/0.01;
 
+        let hit_y = pos.y + dir.y * dist;
+
         var ray = raycast(pos, dir, dist);
         if (!ray.hit) {
+            if (hit_y > 150.0) {
+                if (dot(dir, uniforms.sun) > 0.99996) {
+                    color += light_color * 10000.0;
+                }
+                break;
+            }
             ray.normal = random_direction(-dir);
             ray.distance = dist;
-            ray.color = vec4<f32>(1.0, 1.0, 1.0, 0.0);
+            ray.color = vec4<f32>(0.8, 0.8, 0.8, 0.0);
         }
 
         pos = pos + dir * ray.distance;
@@ -198,14 +209,14 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
         // let sundir = normalize(random_disk(uniforms.sun) + 20.0 * uniforms.sun);
         // let sundot = dot(-ray.normal, sundir);
         // if (sundot > 0.0) {
-        //     let sunray = raycast(pos, sundir, 1.0 / 0.0);
+        //     let sunray = raycast(pos, sundir, 100000.0);
         //     if (!sunray.hit) {
         //         color = color + light_color * sundot;
         //     }
         // }
 
         if (all(ray.color == vec4<f32>(1.0, 1.0, 1.0, 1.0))) {
-            color = color + light_color * 100.0;
+            color = color + light_color * 10.0;
         }
     }
     return color;
@@ -219,9 +230,10 @@ fn fragment_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let px_size = vec2<f32>(dpdx(ld.x), dpdy(ld.y));
     var result = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     for (var i = 0; i < 1; i = i + 1) {
-        let rnd = (random().xy - 0.5) * px_size + ld;
+        let rng = random();
+        let rnd = (rng.xy - 0.5) * px_size + ld;
         var d = uniforms.looking * normalize(vec3<f32>(rnd.x, -rnd.y, 1.0));
-        result = result + raytrace(uniforms.pos, d);
+        result = result + raytrace(uniforms.pos, d, rng.z * 4.2);
     }
     return result / 1.0;
 }

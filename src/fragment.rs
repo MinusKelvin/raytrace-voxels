@@ -14,6 +14,7 @@ pub struct FragmentRaytracer {
     uniform_buffer: wgpu::Buffer,
     space_buffer: wgpu::Buffer,
     space_group: wgpu::BindGroup,
+    // wl_to_color: wgpu::Texture,
     accumulator: wgpu::Texture,
     accumulator_desc: wgpu::TextureDescriptor<'static>,
     accumulator_view: wgpu::TextureView,
@@ -21,7 +22,7 @@ pub struct FragmentRaytracer {
     copy_bind_group: wgpu::BindGroup,
     copy_pipeline: wgpu::RenderPipeline,
     samples_buffer: wgpu::Buffer,
-    pub samples: f32,
+    pub samples: usize,
 
     prev_yaw: f32,
     prev_pitch: f32,
@@ -68,6 +69,63 @@ impl FragmentRaytracer {
                 resource: wgpu::BindingResource::Buffer(uniform_buffer.as_entire_buffer_binding()),
             }],
         });
+
+        // let wl_to_color_image = image::load_from_memory(include_bytes!("wl-to-color.png"))
+        //     .unwrap()
+        //     .to_rgba8();
+
+        // let wl_to_color_texture = gpu.device.create_texture_with_data(
+        //     &gpu.queue,
+        //     &wgpu::TextureDescriptor {
+        //         label: None,
+        //         size: wgpu::Extent3d {
+        //             width: wl_to_color_image.width(),
+        //             height: 1,
+        //             depth_or_array_layers: 1,
+        //         },
+        //         mip_level_count: 1,
+        //         sample_count: 1,
+        //         dimension: wgpu::TextureDimension::D1,
+        //         format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        //         usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        //         view_formats: &[],
+        //     },
+        //     wgpu::util::TextureDataOrder::LayerMajor,
+        //     &wl_to_color_image,
+        // );
+
+        // let wl_to_color_group_layout =
+        //     gpu.device
+        //         .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        //             label: None,
+        //             entries: &[
+        //                 wgpu::BindGroupLayoutEntry {
+        //                     binding: 0,
+        //                     visibility: wgpu::ShaderStages::FRAGMENT,
+        //                     ty: wgpu::BindingType::Texture {
+        //                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
+        //                         view_dimension: wgpu::TextureViewDimension::D1,
+        //                         multisampled: false,
+        //                     },
+        //                     count: None,
+        //                 },
+        //                 wgpu::BindGroupLayoutEntry {
+        //                     binding: 1,
+        //                     visibility: wgpu::ShaderStages::FRAGMENT,
+        //                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        //                     count: None,
+        //                 },
+        //             ],
+        //         });
+
+        // let wl_to_color_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        //     label: None,
+        //     layout: &wl_to_color_group_layout,
+        //     entries: &[wgpu::BindGroupEntry {
+        //         binding: 0,
+        //         resource: wgpu::BindingResource::TextureView(),
+        //     }],
+        // });
 
         let buffer: Vec<_> = space
             .voxels
@@ -280,7 +338,7 @@ impl FragmentRaytracer {
             copy_bind_group,
             copy_pipeline,
             samples_buffer,
-            samples: 0.0,
+            samples: 0,
             prev_yaw: 0.0,
             prev_pitch: 0.0,
             prev_pos: Vec3::ZERO,
@@ -323,7 +381,7 @@ impl FragmentRaytracer {
             || pitch != self.prev_pitch
             || gpu.size != self.prev_size
         {
-            self.samples = 0.0;
+            self.samples = 0;
             self.prev_pitch = pitch;
             self.prev_yaw = yaw;
             self.prev_pos = camera;
@@ -367,7 +425,7 @@ impl FragmentRaytracer {
             ],
             pos: camera,
             size: space.size,
-            sun: Vec3::new(0.1, 1.0, 0.2).normalize(),
+            sun: Vec3::new(0.8, 1.2743, 3.7).normalize(),
             vp_size: Vec2::new(gpu.size.width as f32, gpu.size.height as f32),
             rng: thread_rng().gen(),
             _padding0: 0,
@@ -379,9 +437,9 @@ impl FragmentRaytracer {
         gpu.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        self.samples += 1.0;
+        self.samples += 1;
         gpu.queue
-            .write_buffer(&self.samples_buffer, 0, bytemuck::bytes_of(&self.samples));
+            .write_buffer(&self.samples_buffer, 0, bytemuck::bytes_of(&(self.samples as f32)));
 
         let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
