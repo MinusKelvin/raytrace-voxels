@@ -4,7 +4,9 @@ use std::time::{Duration, Instant};
 
 use fragment::FragmentRaytracer;
 use glam::{EulerRot, IVec3, Mat3, Quat, Vec3};
+use image::{DynamicImage, Pixel, Rgba32FImage};
 use rand::prelude::*;
+use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, StartCause, WindowEvent};
@@ -212,10 +214,7 @@ impl ApplicationHandler for App {
                         window.set_cursor_visible(!self.grabbed);
 
                         if !self.grabbed {
-                            println!(
-                                "{:?} {} {}",
-                                self.camera, self.yaw, self.pitch
-                            );
+                            println!("{:?} {} {}", self.camera, self.yaw, self.pitch);
                         }
                     }
                     PhysicalKey::Code(KeyCode::KeyA) => self.left = state,
@@ -268,6 +267,59 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
+    if std::env::args().any(|s| s == "combine") {
+        std::fs::create_dir_all("movie").unwrap();
+        let mut files = vec![];
+        for f in std::fs::read_dir("frames").unwrap() {
+            let path = f.unwrap().path();
+            if path.extension() != Some("exr".as_ref()) {
+                continue;
+            }
+            let seq: usize = path
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .split_once('-')
+                .unwrap()
+                .1
+                .parse()
+                .unwrap();
+            while seq >= files.len() {
+                files.push(vec![]);
+            }
+            files[seq].push(path);
+        }
+
+        files
+            .into_par_iter()
+            .enumerate()
+            .for_each(|(i, to_combine)| {
+                let divisor = to_combine.len() as f32;
+                let mut iter = to_combine.into_iter();
+                let mut acc = image::open(iter.next().unwrap()).unwrap().into_rgba32f();
+                for f in iter {
+                    let img = image::open(f).unwrap().into_rgba32f();
+                    assert_eq!(acc.width(), img.width());
+                    assert_eq!(acc.height(), img.height());
+                    for (acc, p) in acc.pixels_mut().zip(img.pixels()) {
+                        acc.apply2(p, |a, b| a + b);
+                    }
+                }
+
+                for p in acc.pixels_mut() {
+                    p.apply(|v| v / divisor);
+                }
+
+                DynamicImage::ImageRgba32F(acc)
+                    .to_rgba8()
+                    .save(format!("movie/{i}.png"))
+                    .unwrap();
+            });
+
+        return;
+    }
+
     let mut space = Space::new(IVec3::splat(256));
     let seed = [
         218, 29, 221, 89, 183, 102, 2, 53, 176, 211, 63, 26, 195, 8, 107, 217, 90, 70, 178, 102,
@@ -277,8 +329,8 @@ fn main() {
     for x in 1..space.size.x - 1 {
         for z in 1..space.size.z - 1 {
             let h = ((x as f32 / 10.0).sin() * 6.0 + (z as f32 / 10.0).sin() * 20.0) as i32 + 96;
-            // let h2 = match rng.gen_bool(0.001) {
-            //     true => h + 15,
+            // let h2 = match rng.gen_bool(0.02) {
+            //     true => h + 1,
             //     false => h,
             // };
             for y in 0..h {
@@ -286,6 +338,7 @@ fn main() {
             }
             // if h != h2 {
             //     space.set(IVec3::new(x, h2 - 1, z), Cell::Solid([1.0; 3]));
+            // }
             //     space.set(IVec3::new(x, h2, z), Cell::Solid([0.75; 3]));
             //     space.set(IVec3::new(x - 1, h2 - 2, z), Cell::Solid([0.75; 3]));
             //     space.set(IVec3::new(x + 1, h2 - 2, z), Cell::Solid([0.75; 3]));
@@ -304,11 +357,10 @@ fn main() {
     }
     for i in -2..=16 {
         for j in -2..=16 {
-            space.set(IVec3::new(i + 100, j + 90, 100), Cell::Solid([0.75; 3]));
-            space.set(IVec3::new(100, j + 90, i + 100), Cell::Solid([0.75; 3]));
-            space.set(IVec3::new(i + 100, j + 90, 116), Cell::Solid([0.75; 3]));
-            space.set(IVec3::new(116, j + 90, i + 100), Cell::Solid([0.75; 3]));
-            space.set(IVec3::new(100 + j, 106, i + 100), Cell::Solid([0.75; 3]));
+            space.set(IVec3::new(i + 100, j + 74, 100), Cell::Solid([0.75; 3]));
+            space.set(IVec3::new(100, j + 74, i + 100), Cell::Solid([0.75; 3]));
+            space.set(IVec3::new(i + 100, j + 74, 116), Cell::Solid([0.75; 3]));
+            space.set(IVec3::new(116, j + 74, i + 100), Cell::Solid([0.75; 3]));
             space.set(IVec3::new(100 + j, 90, i + 100), Cell::Solid([0.75; 3]));
         }
     }
@@ -374,7 +426,7 @@ fn main() {
         yaw: 1.12996435,
         pitch: -0.19000018,
         camera: Vec3::new(34.811836, 114.02207, 74.028244),
-        sun: Vec3::new(0.8, 10.2743, 3.7).normalize(),
+        sun: Vec3::new(0.8, 0.2743, 3.7).normalize(),
         grabbed: false,
         left: false,
         right: false,
@@ -398,6 +450,7 @@ fn main() {
     };
     if app.headless {
         app.init();
+        std::fs::create_dir_all("frames").unwrap();
         loop {
             app.sample();
         }

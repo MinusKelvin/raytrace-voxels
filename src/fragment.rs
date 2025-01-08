@@ -493,6 +493,11 @@ impl FragmentRaytracer {
             }
         }
 
+        // if self.samples == 10 {
+        //     std::thread::sleep(std::time::Duration::from_millis(1));
+        //     return;
+        // }
+
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });

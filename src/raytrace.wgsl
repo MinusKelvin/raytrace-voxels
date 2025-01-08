@@ -46,6 +46,7 @@ struct RaycastResult {
 };
 
 const EPS: f32 = 0.0000001;
+const PI: f32 = 3.1415926535;
 
 fn raycast(start: vec3<f32>, d_: vec3<f32>, limit: f32) -> RaycastResult {
     var result: RaycastResult;
@@ -158,7 +159,7 @@ fn random() -> vec3<f32> {
 fn random_disk(n: vec3<f32>) -> vec3<f32> {
     let rand = random();
     let r = sqrt(rand.x);
-    let angle = rand.y * 2.0 * 3.1415926535;
+    let angle = rand.y * 2.0 * PI;
     let p = vec2<f32>(r * cos(angle), r * sin(angle));
 
     let bitangent = normalize(cross(random(), n));
@@ -166,19 +167,24 @@ fn random_disk(n: vec3<f32>) -> vec3<f32> {
     return tangent * p.x + bitangent * p.y;
 }
 
-fn random_direction(n: vec3<f32>) -> vec3<f32> {
+fn cos_hemisphere(n: vec3<f32>) -> vec3<f32> {
     let disk = random_disk(n);
     return disk + n * sqrt(1.0 - dot(disk, disk));
 }
 
-fn random_sphere() -> vec3<f32> {
-    for (var i = 0; i < 100; i = i + 1) {
-        let d = random() * 2.0 - 1.0;
-        if (dot(d, d) <= 1.0) {
-            return normalize(d);
-        }
-    }
-    return vec3<f32>(0.0, 0.0, 0.0);
+fn uniform_hemisphere(n: vec3<f32>) -> vec3<f32> {
+    let rand = random();
+    let angle = rand.z * 2.0 * PI;
+    let z = rand.y;
+    let p = vec2<f32>(cos(angle), sin(angle)) * sqrt(1 - z*z);
+
+    let bitangent = normalize(cross(random(), n));
+    let tangent = cross(bitangent, n);
+    return tangent * p.x + bitangent * p.y + n * z;
+}
+
+fn brdf(outgoing: vec3<f32>, incoming: vec3<f32>, normal: vec3<f32>) -> f32 {
+    return 1.0 / PI;
 }
 
 fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec4<f32> {
@@ -197,6 +203,9 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec4<f32> {
 
         var ray = raycast(pos, dir, dist);
         if (!ray.hit) {
+            if (dot(hit, hit) < 100000000.0) {
+                break;
+            }
             // if (hit.y > 11000.0) {
             if (dot(hit, hit) > 121000000.0) {
                 if (dot(dir, uniforms.sun) > 0.99996) {
@@ -204,14 +213,20 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec4<f32> {
                 }
                 break;
             }
-            ray.normal = random_direction(-dir);
+            ray.normal = cos_hemisphere(-dir);
             ray.distance = dist;
-            ray.color = vec4<f32>(0.8, 0.8, 0.8, 0.0);
+            ray.color = vec4<f32>(1.0, 1.0, 1.0, 0.0);
         }
 
         pos = pos + dir * ray.distance;
-        dir = random_direction(-ray.normal);
-        light_color = light_color * ray.color;
+        let new_dir = cos_hemisphere(-ray.normal);
+        // let new_dir = uniform_hemisphere(-ray.normal);
+        light_color = light_color
+            * ray.color
+            * brdf(-dir, new_dir, -ray.normal)
+            // * dot(-ray.normal, new_dir) * 2
+            * PI;
+        dir = new_dir;
 
         // let sundir = normalize(random_disk(uniforms.sun) + 20.0 * uniforms.sun);
         // let sundot = dot(-ray.normal, sundir);
