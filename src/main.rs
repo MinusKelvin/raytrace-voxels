@@ -3,9 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fragment::FragmentRaytracer;
-use glam::{EulerRot, IVec3, Mat3, Vec3};
+use glam::{EulerRot, IVec3, Mat3, Quat, Vec3};
 use rand::prelude::*;
-use svo::SvoSpace;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, StartCause, WindowEvent};
@@ -25,6 +24,7 @@ struct App {
     yaw: f32,
     pitch: f32,
     camera: Vec3,
+    sun: Vec3,
     grabbed: bool,
 
     left: bool,
@@ -38,35 +38,25 @@ struct App {
     times: [Duration; 250],
     framecount: usize,
 
+    seq: usize,
+    iter: usize,
+    frame_start: Instant,
+
     space: Space,
+
+    headless: bool,
 }
 
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let window = Arc::new(
-            event_loop
-                .create_window(WindowAttributes::default().with_inner_size(PhysicalSize::new(853, 480)))
-                .unwrap(),
-        );
-
-        let gpu = pollster::block_on(WgpuState::new(&window));
-
+impl App {
+    fn init(&mut self) {
+        let gpu = pollster::block_on(WgpuState::new(self.window.as_ref()));
         let fragment = FragmentRaytracer::new(&gpu, &self.space);
 
         self.gpu = Some(gpu);
-        self.window = Some(window);
         self.fragment = Some(fragment);
-
-        event_loop.set_control_flow(ControlFlow::Poll);
     }
 
-    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
-        if cause != StartCause::Poll {
-            return;
-        }
-        let Some(window) = self.window.as_ref() else {
-            return;
-        };
+    fn sample(&mut self) {
         let Some(gpu) = self.gpu.as_mut() else { return };
         let Some(fragment) = self.fragment.as_mut() else {
             return;
@@ -75,21 +65,10 @@ impl ApplicationHandler for App {
         let now = std::time::Instant::now();
         let delta = now - self.last_time;
         self.times[self.framecount % self.times.len()] = delta;
-        let total_time = self.times.iter().copied().sum::<Duration>();
-        let fps = self.times.len() as f64 / total_time.as_secs_f64();
-        window.set_title(&format!(
-            "{fps:.0} FPS, {} samples",
-            fragment.samples as i32
-        ));
         let delta = delta.as_secs_f32();
         self.last_time = now;
 
-        if self.framecount == 5000 {
-            println!(
-                "{total_time:.2?} {:?} {} {}",
-                self.camera, self.yaw, self.pitch
-            );
-        }
+        if self.framecount == 5000 {}
         self.framecount += 1;
 
         let mut d = Vec3::ZERO;
@@ -111,26 +90,94 @@ impl ApplicationHandler for App {
             self.camera.y += (self.up as i32 - self.down as i32) as f32 * delta * 10.0;
         }
 
-        match gpu.surface.get_current_texture() {
-            Ok(frame) => {
+        // let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
+        fragment.sample(
+            &gpu,
+            &self.space,
+            self.camera,
+            self.yaw,
+            self.pitch,
+            self.sun,
+        );
+
+        if self.headless && fragment.samples == 1_000 {
+            fragment.save_image(gpu, format!("frames/{:04}-{:03}.exr", self.iter, self.seq));
+            let (axis, angle) = Quat::from_rotation_arc(
+                Vec3::new(0.8, 1.0, 3.7).normalize(),
+                Vec3::new(0.8, 0.0, 3.7).normalize(),
+            )
+            .to_axis_angle();
+            let quat = Quat::from_axis_angle(axis, 0.01 * angle.signum());
+            self.seq += 1;
+            self.sun = quat * self.sun;
+            if self.sun.y < -0.3 {
+                self.iter += 1;
+                self.sun = Vec3::new(0.8, 10.2743, 3.7).normalize();
+                self.seq = 0;
+            }
+            let now = Instant::now();
+            println!(
+                "{} paths/px/sec",
+                10.0 * fragment.samples as f64 / (now - self.frame_start).as_secs_f64()
+            );
+            self.frame_start = now;
+        }
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.window = Some(Arc::new(
+            event_loop
+                .create_window(
+                    WindowAttributes::default().with_inner_size(PhysicalSize::new(853, 480)),
+                )
+                .unwrap(),
+        ));
+
+        event_loop.set_control_flow(ControlFlow::Poll);
+
+        self.init();
+    }
+
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        if cause != StartCause::Poll {
+            return;
+        }
+
+        self.sample();
+
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let Some(gpu) = self.gpu.as_mut() else { return };
+        let Some(fragment) = self.fragment.as_mut() else {
+            return;
+        };
+
+        let total_time = self.times.iter().copied().sum::<Duration>();
+        let fps = self.times.len() as f64 / total_time.as_secs_f64();
+        window.set_title(&format!(
+            "{} samples, {fps:.0}/sec",
+            fragment.samples as i32
+        ));
+
+        match gpu.surface.as_ref().map(|s| s.get_current_texture()) {
+            Some(Ok(frame)) => {
                 let view = frame
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                // let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
-                let fg_cmd =
-                    fragment.render(&gpu, &view, &self.space, self.camera, self.yaw, self.pitch);
-
-                gpu.queue.submit([/*sw_cmd,*/ fg_cmd]);
+                fragment.show(&gpu, &view);
 
                 window.pre_present_notify();
                 frame.present();
 
                 window.request_redraw();
             }
-            Err(wgpu::SurfaceError::Lost) => gpu.resize(gpu.size),
-            Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-            Err(_) => {}
+            Some(Err(wgpu::SurfaceError::Lost)) => gpu.resize(gpu.size),
+            Some(Err(wgpu::SurfaceError::OutOfMemory)) => event_loop.exit(),
+            _ => {}
         }
     }
 
@@ -149,7 +196,7 @@ impl ApplicationHandler for App {
                 mut inner_size_writer,
                 ..
             } => {
-                inner_size_writer.request_inner_size(gpu.size);
+                inner_size_writer.request_inner_size(gpu.size).unwrap();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let state = event.state == ElementState::Pressed;
@@ -163,6 +210,13 @@ impl ApplicationHandler for App {
                             })
                             .unwrap();
                         window.set_cursor_visible(!self.grabbed);
+
+                        if !self.grabbed {
+                            println!(
+                                "{:?} {} {}",
+                                self.camera, self.yaw, self.pitch
+                            );
+                        }
                     }
                     PhysicalKey::Code(KeyCode::KeyA) => self.left = state,
                     PhysicalKey::Code(KeyCode::KeyD) => self.right = state,
@@ -313,53 +367,65 @@ fn main() {
     // println!("array size: {}", space.mem_usage());
     // println!("  svo size: {}", svo_space.mem_usage());
 
-    EventLoop::new()
-        .unwrap()
-        .run_app(&mut App {
-            window: None,
-            gpu: None,
+    let mut app = App {
+        window: None,
+        gpu: None,
 
-            yaw: 0.62996435,
-            pitch: 0.09000018,
-            camera: Vec3::new(34.811836, 114.02207, 74.028244),
-            grabbed: false,
-            left: false,
-            right: false,
-            forward: false,
-            backward: false,
-            up: false,
-            down: false,
+        yaw: 1.12996435,
+        pitch: -0.19000018,
+        camera: Vec3::new(34.811836, 114.02207, 74.028244),
+        sun: Vec3::new(0.8, 10.2743, 3.7).normalize(),
+        grabbed: false,
+        left: false,
+        right: false,
+        forward: false,
+        backward: false,
+        up: false,
+        down: false,
 
-            last_time: Instant::now(),
-            times: [Duration::ZERO; 250],
-            framecount: 0,
+        last_time: Instant::now(),
+        times: [Duration::ZERO; 250],
+        framecount: 0,
 
-            space,
-            fragment: None,
-        })
-        .unwrap();
+        seq: 0,
+        iter: 0,
+        frame_start: Instant::now(),
+
+        space,
+        fragment: None,
+
+        headless: std::env::args().any(|s| s == "headless"),
+    };
+    if app.headless {
+        app.init();
+        loop {
+            app.sample();
+        }
+    } else {
+        EventLoop::new().unwrap().run_app(&mut app).unwrap();
+    }
 
     // let mut software = software::SoftwareRaytracer::new(&gpu, &space);
 }
 
 struct WgpuState {
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
+    surface: Option<wgpu::Surface<'static>>,
+    config: Option<wgpu::SurfaceConfiguration>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     size: PhysicalSize<u32>,
 }
 
 impl WgpuState {
-    async fn new(window: &Arc<Window>) -> Self {
-        let size = window.inner_size();
+    async fn new(window: Option<&Arc<Window>>) -> Self {
+        let size = window.map_or(PhysicalSize::new(853, 480), |w| w.inner_size());
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-        let surface = instance.create_surface(window.clone()).unwrap();
+        let surface = window.map(|w| instance.create_surface(w.clone()).unwrap());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
-                compatible_surface: Some(&surface),
+                compatible_surface: surface.as_ref(),
                 force_fallback_adapter: false,
             })
             .await
@@ -378,7 +444,7 @@ impl WgpuState {
             .await
             .unwrap();
 
-        let config = wgpu::SurfaceConfiguration {
+        let config = surface.as_ref().map(|surface| wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             // format: wgpu::TextureFormat::Rgba16Float,
             format: surface
@@ -393,8 +459,10 @@ impl WgpuState {
             desired_maximum_frame_latency: 2,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
-        };
-        surface.configure(&device, &config);
+        });
+        if let Some((surface, config)) = surface.as_ref().zip(config.as_ref()) {
+            surface.configure(&device, config);
+        }
 
         Self {
             surface,
@@ -406,11 +474,13 @@ impl WgpuState {
     }
 
     fn resize(&mut self, new_size: PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
+        if let Some((surface, config)) = self.surface.as_ref().zip(self.config.as_mut()) {
+            if new_size.width > 0 && new_size.height > 0 {
+                self.size = new_size;
+                config.width = new_size.width;
+                config.height = new_size.height;
+                surface.configure(&self.device, config);
+            }
         }
     }
 }

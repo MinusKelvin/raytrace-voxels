@@ -87,7 +87,7 @@ impl SoftwareRaytracer {
                     module: &copy_shader,
                     entry_point: None,
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: gpu.config.format,
+                        format: gpu.config.as_ref().unwrap().format,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
