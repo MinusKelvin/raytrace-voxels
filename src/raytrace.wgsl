@@ -218,14 +218,11 @@ fn sun_pdf(d: vec3<f32>) -> f32 {
 
 fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32, bounces: i32) -> vec3<f32> {
     let wlp1_cubed = (wavelength + 1.0) * (wavelength + 1.0) * (wavelength + 1.0);
-    let density = 1.0e-3;// / (wlp1_cubed * (wavelength + 1.0));
+    let density = 1.0e-3 / (wlp1_cubed * (wavelength + 1.0));
     var color = vec3<f32>(0.0);
     var light_color = textureSample(wl_to_color_tex, wl_to_color_samp, wavelength).rgb
         * 1.0 / (wlp1_cubed * (exp(0.1 / (wavelength + 1.0)) - 1.0))
         * vec3<f32>(1.0, 0.8, 1.0);
-        light_color.r = 1.0;
-        light_color.g = 1.0;
-        light_color.b = 1.0;
     var pos = start;
     var dir = d;
 

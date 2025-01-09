@@ -103,31 +103,37 @@ impl App {
             self.sun,
         );
 
-        if self.headless && fragment.samples % 1_000 == 0 {
+        if self.headless && fragment.samples == 1_000 {
             fragment.save_image(gpu, format!("frames/{:04}-{:03}.exr", self.iter, self.seq));
-            // let (axis, angle) = Quat::from_rotation_arc(
-            //     Vec3::new(0.8, 1.0, 3.7).normalize(),
-            //     Vec3::new(0.8, 0.0, 3.7).normalize(),
-            // )
-            // .to_axis_angle();
-            // let quat = Quat::from_axis_angle(axis, 0.01 * angle.signum());
-            // self.seq += 1;
-            // self.sun = quat * self.sun;
-            // if self.sun.y < -0.3 {
-            //     self.iter += 1;
-            //     self.sun = Vec3::new(0.8, 10.2743, 3.7).normalize();
-            //     self.seq = 0;
-            // }
+
             let now = Instant::now();
             println!(
-                "{:.0} paths/px/sec {} samples",
+                "{:>4.0} paths/px/sec    iter {:>2} frame {:>3}",
                 1000.0 / (now - self.frame_start).as_secs_f64(),
-                fragment.samples
+                self.iter,
+                self.seq,
             );
             self.frame_start = now;
-            // if self.seq == 0 {
-            //     println!("Finished iter {}", self.iter-1);
-            // }
+
+            let (axis, angle) = Quat::from_rotation_arc(
+                Vec3::new(0.8, 1.0, 3.7).normalize(),
+                Vec3::new(0.8, 0.0, 3.7).normalize(),
+            )
+            .to_axis_angle();
+            let quat = Quat::from_axis_angle(axis, 0.0025 * angle.signum());
+            self.seq += 1;
+            self.sun = quat * self.sun;
+            if self.sun.y < -0.4 {
+                self.iter += 1;
+                self.sun = Vec3::new(0.8, 10.2743, 3.7).normalize();
+                self.seq = 0;
+            }
+            if self.seq == 0 {
+                println!("Finished iter {}", self.iter-1);
+                if self.iter == 10 {
+                    std::process::exit(0);
+                }
+            }
         }
     }
 }
