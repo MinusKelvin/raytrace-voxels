@@ -191,7 +191,7 @@ fn brdf(outgoing: vec3<f32>, incoming: vec3<f32>, normal: vec3<f32>) -> f32 {
     return 1.0 / PI;
 }
 
-const SUN_ANGULAR_RADIUS: f32 = 0.535 * PI / 180 / 2;
+const SUN_ANGULAR_RADIUS: f32 = 0.535 * PI / 180;
 const COS_SUN_RADIUS: f32 = cos(SUN_ANGULAR_RADIUS);
 const SUN_COLOR: vec3<f32> = vec3<f32>(10000.0);
 
@@ -205,6 +205,8 @@ fn sample_sun() -> vec3<f32> {
     let tangent = cross(bitangent, uniforms.sun);
     return tangent * p.x + bitangent * p.y + uniforms.sun * z;
 }
+
+const SUN_WEIGHT: f32 = (1 - COS_SUN_RADIUS);
 
 fn sun_pdf(d: vec3<f32>) -> f32 {
     if dot(d, uniforms.sun) > COS_SUN_RADIUS {
@@ -244,7 +246,7 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32, bounces: i32) -> ve
             // if hit.y > FOG_RADIUS {
             if dot(fog_hit, fog_hit) > FOG_RADIUS * FOG_RADIUS {
                 // special-case initial ray hitting the sun
-                if (dot(dir, uniforms.sun) > COS_SUN_RADIUS) {
+                if depth == 0 && (dot(dir, uniforms.sun) > COS_SUN_RADIUS) {
                     color += light_color * SUN_COLOR;
                 }
                 break;
@@ -260,11 +262,12 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32, bounces: i32) -> ve
         // L_r = L_direct + L_indirect
 
         // compute L_direct
-        let direct_dir = cos_hemisphere(-ray.normal);
+        // let direct_dir = cos_hemisphere(-ray.normal);
         // let direct_dir = uniform_hemisphere(-ray.normal);
+        let direct_dir = sample_sun();
         // compute visibility
-        if dot(direct_dir, uniforms.sun) > COS_SUN_RADIUS {
-            // only continue if direction is towards sun
+        if dot(direct_dir, -ray.normal) > 0.0 {
+            // only continue if direction is not into the surface
             let direct_fog_dist = -log(1.0-random().x)/density;
             let direct_fog_hit = pos + direct_dir * direct_fog_dist
                 - vec3<f32>(uniforms.size) / 2.0
@@ -276,9 +279,11 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32, bounces: i32) -> ve
                     // hit the sun, so add sun contribution
                     color += light_color
                         * SUN_COLOR
+                        * ray.color.rgb
                         * brdf(-dir, direct_dir, -ray.normal)
-                        // * dot(-ray.normal, direct_dir) * 2
-                        * PI;
+                        * dot(-ray.normal, direct_dir) * 2
+                        * PI
+                        * SUN_WEIGHT;
                 }
             }
         }
@@ -310,11 +315,11 @@ fn fragment_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     var ld = 4.0 * (pos.xy - uniforms.vp_size / 2.0) / uniforms.vp_size.y;
     let px_size = vec2<f32>(dpdx(ld.x), dpdy(ld.y));
     var result = vec3<f32>(0.0);
-    for (var i = 0; i < 10; i = i + 1) {
+    for (var i = 0; i < 1; i = i + 1) {
         let rng = random();
         let rnd = (rng.xy - 0.5) * px_size + ld;
         var d = uniforms.looking * normalize(vec3<f32>(rnd.x, -rnd.y, 1.0));
         result = result + raytrace(uniforms.pos, d, rng.z, 5);
     }
-    return vec4<f32>(result / 10.0, 0.0);
+    return vec4<f32>(result / 1.0, 0.0);
 }

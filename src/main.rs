@@ -103,7 +103,7 @@ impl App {
             self.sun,
         );
 
-        if self.headless && fragment.samples % 10_000 == 0 {
+        if self.headless && fragment.samples % 1_000 == 0 {
             fragment.save_image(gpu, format!("frames/{:04}-{:03}.exr", self.iter, self.seq));
             // let (axis, angle) = Quat::from_rotation_arc(
             //     Vec3::new(0.8, 1.0, 3.7).normalize(),
@@ -121,7 +121,7 @@ impl App {
             let now = Instant::now();
             println!(
                 "{:.0} paths/px/sec {} samples",
-                10.0 * 10000.0 / (now - self.frame_start).as_secs_f64(),
+                1000.0 / (now - self.frame_start).as_secs_f64(),
                 fragment.samples
             );
             self.frame_start = now;
