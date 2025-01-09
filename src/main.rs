@@ -8,6 +8,7 @@ use glam::{EulerRot, IVec3, Mat3, Quat, Vec3};
 use image::{DynamicImage, Pixel, Rgba32FImage};
 use rand::prelude::*;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use software::SoftwareRaytracer;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, StartCause, WindowEvent};
@@ -19,9 +20,11 @@ mod fragment;
 mod software;
 mod svo;
 
+type Raytracer = FragmentRaytracer;
+
 struct App {
     gpu: Option<WgpuState>,
-    fragment: Option<FragmentRaytracer>,
+    renderer: Option<Raytracer>,
     window: Option<Arc<Window>>,
 
     yaw: f32,
@@ -53,15 +56,15 @@ struct App {
 impl App {
     fn init(&mut self) {
         let gpu = pollster::block_on(WgpuState::new(self.window.as_ref()));
-        let fragment = FragmentRaytracer::new(&gpu, &self.space);
+        let raytracer = Raytracer::new(&gpu, &self.space);
 
         self.gpu = Some(gpu);
-        self.fragment = Some(fragment);
+        self.renderer = Some(raytracer);
     }
 
     fn sample(&mut self) {
         let Some(gpu) = self.gpu.as_mut() else { return };
-        let Some(fragment) = self.fragment.as_mut() else {
+        let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
 
@@ -94,7 +97,7 @@ impl App {
         }
 
         // let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
-        fragment.sample(
+        renderer.sample(
             &gpu,
             &self.space,
             self.camera,
@@ -103,8 +106,18 @@ impl App {
             self.sun,
         );
 
-        if self.headless && fragment.samples == 1_000 {
-            fragment.save_image(gpu, format!("frames/{:04}-{:03}.exr", self.iter, self.seq));
+        if self.headless && renderer.samples % 1_000 == 0 {
+            self.seq = 5;
+            renderer.save_image(gpu, format!("frames/{:04}-{:03}.exr", self.iter, self.seq));
+
+            // let (axis, angle) = Quat::from_rotation_arc(
+            //     Vec3::new(0.8, 1.0, 3.7).normalize(),
+            //     Vec3::new(0.8, 0.0, 3.7).normalize(),
+            // )
+            // .to_axis_angle();
+            // let quat = Quat::from_axis_angle(axis, 0.01 * angle.signum());
+            // self.seq += 1;
+            // self.sun = quat * self.sun;
 
             let now = Instant::now();
             println!(
@@ -115,25 +128,22 @@ impl App {
             );
             self.frame_start = now;
 
-            let (axis, angle) = Quat::from_rotation_arc(
-                Vec3::new(0.8, 1.0, 3.7).normalize(),
-                Vec3::new(0.8, 0.0, 3.7).normalize(),
-            )
-            .to_axis_angle();
-            let quat = Quat::from_axis_angle(axis, 0.0025 * angle.signum());
-            self.seq += 1;
-            self.sun = quat * self.sun;
-            if self.sun.y < -0.4 {
-                self.iter += 1;
-                self.sun = Vec3::new(0.8, 10.2743, 3.7).normalize();
-                self.seq = 0;
+            if renderer.samples == 10_000 {
+                std::process::exit(0);
             }
-            if self.seq == 0 {
-                println!("Finished iter {}", self.iter-1);
-                if self.iter == 10 {
-                    std::process::exit(0);
-                }
-            }
+
+            // if self.sun.y < -0.3 {
+            //     self.iter += 1;
+            //     self.sun = Vec3::new(0.8, 10.2743, 3.7).normalize();
+            //     self.seq = 0;
+            // }
+
+            // if self.seq == 0 {
+            //     println!("Finished iter {}", self.iter - 1);
+            //     if self.iter == 1 {
+            //         std::process::exit(0);
+            //     }
+            // }
         }
     }
 }
@@ -164,7 +174,7 @@ impl ApplicationHandler for App {
             return;
         };
         let Some(gpu) = self.gpu.as_mut() else { return };
-        let Some(fragment) = self.fragment.as_mut() else {
+        let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
 
@@ -172,7 +182,7 @@ impl ApplicationHandler for App {
         let fps = self.times.len() as f64 / total_time.as_secs_f64();
         window.set_title(&format!(
             "{} samples, {fps:.0}/sec",
-            fragment.samples as i32
+            renderer.samples as i32
         ));
 
         match gpu.surface.as_ref().map(|s| s.get_current_texture()) {
@@ -181,7 +191,7 @@ impl ApplicationHandler for App {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                fragment.show(&gpu, &view);
+                renderer.show(&gpu, &view);
 
                 window.pre_present_notify();
                 frame.present();
@@ -199,7 +209,7 @@ impl ApplicationHandler for App {
             return;
         };
         let Some(gpu) = self.gpu.as_mut() else { return };
-        let Some(fragment) = self.fragment.as_mut() else {
+        let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
         match event {
@@ -257,7 +267,7 @@ impl ApplicationHandler for App {
                     }
 
                     self.space.calculate_distances();
-                    fragment.update_space(&gpu, &self.space);
+                    renderer.update_space(&gpu, &self.space);
                 }
             }
             _ => {}
@@ -270,6 +280,9 @@ impl ApplicationHandler for App {
                 if self.grabbed {
                     self.yaw += delta.0 as f32 * 0.01;
                     self.pitch += delta.1 as f32 * 0.01;
+                    self.pitch = self
+                        .pitch
+                        .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
                 }
             }
             _ => {}
@@ -346,59 +359,57 @@ fn main() {
     let mut rng = rand::rngs::StdRng::from_seed(seed);
     for x in 1..space.size.x - 1 {
         for z in 1..space.size.z - 1 {
-            let h = ((x as f32 / 10.0).sin() * 6.0 + (z as f32 / 10.0).sin() * 20.0) as i32 + 96;
-            // let h2 = match rng.gen_bool(0.02) {
-            //     true => h + 1,
-            //     false => h,
-            // };
+            let h = ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 96;
+            let h2 = match rng.gen_bool(0.002) {
+                true => h + 10,
+                false => h,
+            };
             for y in 0..h {
                 space.set(IVec3::new(x, y, z), Cell::Solid([0.5; 3]));
             }
-            // if h != h2 {
-            //     space.set(IVec3::new(x, h2 - 1, z), Cell::Solid([1.0; 3]));
+            if h != h2 {
+                space.set(IVec3::new(x, h2 - 1, z), Cell::Solid([1.0; 3]));
             // }
-            //     space.set(IVec3::new(x, h2, z), Cell::Solid([0.75; 3]));
-            //     space.set(IVec3::new(x - 1, h2 - 2, z), Cell::Solid([0.75; 3]));
-            //     space.set(IVec3::new(x + 1, h2 - 2, z), Cell::Solid([0.75; 3]));
-            //     space.set(IVec3::new(x, h2 - 2, z - 1), Cell::Solid([0.75; 3]));
-            //     space.set(IVec3::new(x, h2 - 2, z + 1), Cell::Solid([0.75; 3]));
-            //     space.set(IVec3::new(x - 1, h2 - 1, z), Cell::Solid([0.75; 3]));
-            //     space.set(IVec3::new(x + 1, h2 - 1, z), Cell::Solid([0.75; 3]));
-            //     space.set(IVec3::new(x, h2 - 1, z - 1), Cell::Solid([0.75; 3]));
-            //     space.set(IVec3::new(x, h2 - 1, z + 1), Cell::Solid([0.75; 3]));
-            // }
-            if h > 111 {
-                space.set(IVec3::new(x, 111, z), Cell::Solid([1.0, 0.5, 0.3]));
+                space.set(IVec3::new(x, h2, z), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x - 1, h2 - 2, z), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x + 1, h2 - 2, z), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x, h2 - 2, z - 1), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x, h2 - 2, z + 1), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x - 1, h2 - 1, z), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x + 1, h2 - 1, z), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x, h2 - 1, z - 1), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x, h2 - 1, z + 1), Cell::Solid([0.75; 3]));
+            }
+            if h > 98 {
+                space.set(IVec3::new(x, 98, z), Cell::Solid([1.0, 0.5, 0.3]));
             }
             // space.set(IVec3::new(x, 255, z), Cell::Solid([1.0; 3]));
         }
     }
-    for i in -2..=16 {
-        for j in -2..=16 {
-            space.set(IVec3::new(i + 100, j + 74, 100), Cell::Solid([0.75; 3]));
-            space.set(IVec3::new(100, j + 74, i + 100), Cell::Solid([0.75; 3]));
-            space.set(IVec3::new(i + 100, j + 74, 116), Cell::Solid([0.75; 3]));
-            space.set(IVec3::new(116, j + 74, i + 100), Cell::Solid([0.75; 3]));
-            space.set(IVec3::new(100 + j, 90, i + 100), Cell::Solid([0.75; 3]));
+    for i in -2..=24 {
+        for j in -2..=24 {
+            space.set(IVec3::new(i + 100, 103, j + 100), Cell::Solid([1.0, 0.1, 0.1]));
+            space.set(IVec3::new(i + 100, 103, j + 100), Cell::Solid([1.0, 0.1, 0.1]));
+            space.set(IVec3::new(i + 100, 103, j + 100), Cell::Solid([1.0, 0.1, 0.1]));
         }
     }
     // space.set(IVec3::new(113, 106, 113), Cell::Empty([0; 2]));
     // space.set(IVec3::new(112, 106, 113), Cell::Empty([0; 2]));
     // space.set(IVec3::new(112, 106, 112), Cell::Empty([0; 2]));
     // space.set(IVec3::new(113, 106, 112), Cell::Empty([0; 2]));
-    space.set(IVec3::new(113, 107, 113), Cell::Solid([1.0; 3]));
-    space.set(IVec3::new(112, 107, 113), Cell::Solid([1.0; 3]));
-    space.set(IVec3::new(112, 107, 112), Cell::Solid([1.0; 3]));
-    space.set(IVec3::new(113, 107, 112), Cell::Solid([1.0; 3]));
-    space.set(IVec3::new(110, 88, 110), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(111, 88, 110), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(111, 88, 109), Cell::Solid([0.3, 0.5, 1.0]));
-    space.set(IVec3::new(110, 88, 109), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(111, 88, 108), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(110, 88, 108), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(112, 88, 110), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(112, 88, 109), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(112, 88, 108), Cell::Solid([1.0, 0.5, 0.3]));
+    // space.set(IVec3::new(113, 102, 113), Cell::Solid([1.0; 3]));
+    // space.set(IVec3::new(112, 102, 113), Cell::Solid([1.0; 3]));
+    // space.set(IVec3::new(112, 102, 112), Cell::Solid([1.0; 3]));
+    // space.set(IVec3::new(113, 102, 112), Cell::Solid([1.0; 3]));
+    space.set(IVec3::new(110, 90, 110), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(111, 90, 110), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(111, 90, 109), Cell::Solid([0.3, 0.5, 1.0]));
+    space.set(IVec3::new(110, 90, 109), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(111, 90, 108), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(110, 90, 108), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(112, 90, 110), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(112, 90, 109), Cell::Solid([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(112, 90, 108), Cell::Solid([1.0, 0.5, 0.3]));
     space.calculate_distances();
 
     // println!("making svo");
@@ -441,9 +452,9 @@ fn main() {
         window: None,
         gpu: None,
 
-        yaw: 1.12996435,
-        pitch: -0.19000018,
-        camera: Vec3::new(34.811836, 114.02207, 74.028244),
+        yaw: 0.7599647,
+        pitch: 0.21999985,
+        camera: Vec3::new(104.99523, 95.166374, 102.31405),
         sun: Vec3::new(0.8, 10.2743, 3.7).normalize(),
         grabbed: false,
         left: false,
@@ -462,7 +473,7 @@ fn main() {
         frame_start: Instant::now(),
 
         space,
-        fragment: None,
+        renderer: None,
 
         headless: std::env::args().any(|s| s == "headless"),
     };
@@ -671,4 +682,168 @@ impl Space {
 enum Cell {
     Solid([f32; 3]),
     Empty([u32; 2]),
+}
+
+struct ShowPipeline {
+    copy_bind_group_layout: wgpu::BindGroupLayout,
+    copy_bind_group: wgpu::BindGroup,
+    copy_pipeline: wgpu::RenderPipeline,
+    samples_buffer: wgpu::Buffer,
+}
+
+impl ShowPipeline {
+    fn new(gpu: &WgpuState, accumulator_view: &wgpu::TextureView) -> Option<Self> {
+        let config = gpu.config.as_ref()?;
+
+        let samples_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        });
+
+        let copy_bind_group_layout =
+            gpu.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: None,
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float {
+                                    filterable: false,
+                                },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+
+        let copy_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &copy_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&accumulator_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: samples_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let cp_layout = gpu
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&copy_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let copy_shader = gpu
+            .device
+            .create_shader_module(wgpu::include_wgsl!("copy.wgsl"));
+
+        let copy_pipeline =
+            gpu.device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(&cp_layout),
+                    vertex: wgpu::VertexState {
+                        module: &copy_shader,
+                        entry_point: None,
+                        buffers: &[],
+                        compilation_options: Default::default(),
+                    },
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &copy_shader,
+                        entry_point: None,
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: config.format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    multiview: None,
+                    cache: None,
+                });
+
+        Some(ShowPipeline {
+            copy_bind_group_layout,
+            copy_bind_group,
+            copy_pipeline,
+            samples_buffer,
+        })
+    }
+
+    fn update_accumulator(&mut self, gpu: &WgpuState, accumulator_view: &wgpu::TextureView) {
+        self.copy_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.copy_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(accumulator_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.samples_buffer.as_entire_binding(),
+                },
+            ],
+        });
+    }
+
+    fn show(&self, gpu: &WgpuState, target: &wgpu::TextureView, samples: usize) {
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        gpu.queue.write_buffer(
+            &self.samples_buffer,
+            0,
+            bytemuck::bytes_of(&(samples as f32)),
+        );
+
+        let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        rp.set_pipeline(&self.copy_pipeline);
+        rp.set_bind_group(0, &self.copy_bind_group, &[]);
+        rp.draw(0..6, 0..1);
+
+        drop(rp);
+
+        gpu.queue.submit([encoder.finish()]);
+    }
 }

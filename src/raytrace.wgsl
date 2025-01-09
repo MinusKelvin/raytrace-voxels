@@ -216,7 +216,7 @@ fn sun_pdf(d: vec3<f32>) -> f32 {
     }
 }
 
-fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32, bounces: i32) -> vec3<f32> {
+fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec3<f32> {
     let wlp1_cubed = (wavelength + 1.0) * (wavelength + 1.0) * (wavelength + 1.0);
     let density = 1.0e-3 / (wlp1_cubed * (wavelength + 1.0));
     var color = vec3<f32>(0.0);
@@ -227,11 +227,11 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32, bounces: i32) -> ve
     var dir = d;
 
     // compute indirect lighting
-    for (var depth = 0; depth < bounces; depth += 1) {
+    for (var depth = 0; ; depth += 1) {
         // compute location ray hit
         let fog_dist = -log(1.0-random().x)/density;
 
-        const PLANET_RADIUS: f32 = 100000.0;
+        const PLANET_RADIUS: f32 = 1000000.0;
         const FOG_RADIUS: f32 = PLANET_RADIUS + 1000.0;
         let fog_hit = pos + dir * fog_dist
             - vec3<f32>(uniforms.size) / 2.0
@@ -251,7 +251,7 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32, bounces: i32) -> ve
 
             ray.normal = cos_hemisphere(-dir);
             ray.distance = fog_dist;
-            ray.color = vec4<f32>(1.0, 1.0, 1.0, 0.0);
+            ray.color = vec4<f32>(0.8, 0.8, 0.8, 0.0);
         }
 
         pos = pos + dir * ray.distance;
@@ -277,7 +277,7 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32, bounces: i32) -> ve
                     color += light_color
                         * SUN_COLOR
                         * ray.color.rgb
-                        * brdf(-dir, direct_dir, -ray.normal)
+                        * brdf(dir, direct_dir, -ray.normal)
                         * dot(-ray.normal, direct_dir) * 2
                         * PI
                         * SUN_WEIGHT;
@@ -294,12 +294,22 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32, bounces: i32) -> ve
         // let indirect_dir = uniform_hemisphere(-ray.normal);
         // L_indirect contribution is recursive, so we will recurse here.
         light_color *= ray.color.rgb
-            * brdf(-dir, indirect_dir, -ray.normal)
+            * brdf(dir, indirect_dir, -ray.normal)
             // * dot(-ray.normal, indirect_dir) * 2
             * PI;
         dir = indirect_dir;
 
         // indirect lighting calculation recurses
+
+        // russian roulette - basically importance sampling for bounce paths
+        const T: f32 = 0.5;
+        if all(light_color < vec3<f32>(T)) {
+            if random().x < T {
+                light_color *= 1.0/T;
+            } else {
+                break;
+            }
+        }
     }
 
     return color;
@@ -309,14 +319,14 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32, bounces: i32) -> ve
 fn fragment_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     rng = uniforms.rng ^ bitcast<vec3<u32>>(pos.xyz);
 
-    var ld = 4.0 * (pos.xy - uniforms.vp_size / 2.0) / uniforms.vp_size.y;
+    var ld = 2.0 * (pos.xy - uniforms.vp_size / 2.0) / uniforms.vp_size.y;
     let px_size = vec2<f32>(dpdx(ld.x), dpdy(ld.y));
     var result = vec3<f32>(0.0);
     for (var i = 0; i < 1; i = i + 1) {
         let rng = random();
         let rnd = (rng.xy - 0.5) * px_size + ld;
         var d = uniforms.looking * normalize(vec3<f32>(rnd.x, -rnd.y, 1.0));
-        result = result + raytrace(uniforms.pos, d, rng.z, 5);
+        result = result + raytrace(uniforms.pos, d, rng.z);
     }
     return vec4<f32>(result / 1.0, 0.0);
 }

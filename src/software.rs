@@ -1,17 +1,19 @@
+use std::path::Path;
+
 use glam::{EulerRot, IVec3, Vec3, Vec3A};
-use image::{EncodableLayout, Rgba};
+use image::{EncodableLayout, ImageBuffer, Rgba, RgbaImage};
 use rayon::prelude::*;
 use winit::dpi::PhysicalSize;
 
-use crate::{Cell, Space, WgpuState};
+use crate::{Cell, ShowPipeline, Space, WgpuState};
 
 pub struct SoftwareRaytracer {
     tex: wgpu::Texture,
-    pipeline: wgpu::RenderPipeline,
-    bind_group: wgpu::BindGroup,
-    bind_group_layout: wgpu::BindGroupLayout,
     tex_view: wgpu::TextureView,
+    show: Option<ShowPipeline>,
     size: PhysicalSize<u32>,
+    img: image::ImageBuffer<Rgba<u8>, Vec<u8>>,
+    pub samples: usize,
 }
 
 impl SoftwareRaytracer {
@@ -19,7 +21,7 @@ impl SoftwareRaytracer {
         let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
-                width: gpu.size.width / 2,
+                width: gpu.size.width,
                 height: gpu.size.height,
                 depth_or_array_layers: 1,
             },
@@ -32,96 +34,35 @@ impl SoftwareRaytracer {
         });
         let tex_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let bind_group_layout =
-            gpu.device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: None,
-                    entries: &[wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    }],
-                });
-
-        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&tex_view),
-            }],
-        });
-
-        let cp_layout = gpu
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
-            });
-
-        let copy_shader = gpu
-            .device
-            .create_shader_module(wgpu::include_wgsl!("copy.wgsl"));
-
-        let pipeline = gpu
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
-                layout: Some(&cp_layout),
-                vertex: wgpu::VertexState {
-                    module: &copy_shader,
-                    entry_point: None,
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &copy_shader,
-                    entry_point: None,
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: gpu.config.as_ref().unwrap().format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                multiview: None,
-                cache: None,
-            });
+        let show = ShowPipeline::new(gpu, &tex_view);
 
         SoftwareRaytracer {
             tex,
-            pipeline,
-            bind_group,
-            bind_group_layout,
             tex_view,
+            show,
             size: gpu.size,
+            img: ImageBuffer::new(gpu.size.width, gpu.size.height),
+            samples: 1,
         }
     }
 
-    pub(super) fn render(
+    pub(super) fn update_space(&mut self, gpu: &WgpuState, space: &Space) {}
+
+    pub(super) fn sample(
         &mut self,
         gpu: &WgpuState,
-        target: &wgpu::TextureView,
         space: &Space,
         camera: Vec3,
         yaw: f32,
         pitch: f32,
-    ) -> wgpu::CommandBuffer {
+        sun: Vec3,
+    ) {
         if self.size != gpu.size {
             self.size = gpu.size;
             self.tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
                 size: wgpu::Extent3d {
-                    width: gpu.size.width / 2,
+                    width: gpu.size.width,
                     height: gpu.size.height,
                     depth_or_array_layers: 1,
                 },
@@ -135,29 +76,19 @@ impl SoftwareRaytracer {
             self.tex_view = self
                 .tex
                 .create_view(&wgpu::TextureViewDescriptor::default());
-            self.bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.tex_view),
-                }],
-            });
+            if let Some(show) = self.show.as_mut() {
+                show.update_accumulator(gpu, &self.tex_view);
+            }
+
+            self.img = RgbaImage::new(gpu.size.width, gpu.size.height);
         }
 
         let looking = glam::Mat3A::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
 
-        let halfwidth = (self.size.width / 2) as f32 / 2.0;
+        let halfwidth = self.size.width as f32 / 2.0;
         let halfheight = self.size.height as f32 / 2.0;
-        let sun = Vec3::new(0.1, 1.0, 0.2).normalize();
 
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
-        let mut raycast_image =
-            image::ImageBuffer::<Rgba<u8>, Vec<u8>>::new(self.size.width / 2, self.size.height);
-        raycast_image
+        self.img
             .enumerate_rows_mut()
             .par_bridge()
             .for_each(|(_, row)| {
@@ -180,7 +111,9 @@ impl SoftwareRaytracer {
                     ])
                 }
             });
+    }
 
+    pub(super) fn show(&mut self, gpu: &WgpuState, view: &wgpu::TextureView) {
         gpu.queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &self.tex,
@@ -188,41 +121,24 @@ impl SoftwareRaytracer {
                 origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
-            raycast_image.as_bytes(),
+            self.img.as_bytes(),
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * (self.size.width / 2)),
+                bytes_per_row: Some(4 * self.size.width),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
-                width: self.size.width / 2,
+                width: self.size.width,
                 height: self.size.height,
                 depth_or_array_layers: 1,
             },
         );
 
-        let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
+        self.show.as_ref().unwrap().show(gpu, view, self.samples);
+    }
 
-        rp.set_pipeline(&self.pipeline);
-        rp.set_bind_group(0, &self.bind_group, &[]);
-        rp.draw(0..6, 0..1);
-
-        drop(rp);
-
-        encoder.finish()
+    pub(super) fn save_image(&self, gpu: &WgpuState, path: impl AsRef<Path> + Send + 'static) {
+        self.img.save(path).unwrap();
     }
 }
 
@@ -304,24 +220,11 @@ fn raytrace(space: &Space, from: Vec3, d: Vec3, sun: Vec3, depth_limit: usize) -
         return [0.0; 3];
     }
     if let Some((mut c, t, f, _)) = raycast(space, from, d) {
-        let is_reflective = c == [1.0; 3];
         let p = from + d * t;
-        let lighting = sun.dot(-f).max(0.0) / 2.0 + 0.5;
-        let shadow = raycast(space, p - f * 0.001, sun).is_none() as i32 as f32;
-        let lighting = lighting.min(shadow / 2.0 + 0.5);
+        let lighting = sun.dot(-f) / 2.0 + 1.0;
+        // let shadow = raycast(space, p - f * 0.001, sun).is_none() as i32 as f32;
+        // let lighting = lighting * (shadow / 2.0 + 0.5);
         c.iter_mut().for_each(|v| *v *= lighting);
-        if is_reflective {
-            let reflected = raytrace(
-                space,
-                p - f * 0.001,
-                d - 2.0 * d.project_onto(f),
-                sun,
-                depth_limit - 1,
-            );
-            for (v, &r) in c.iter_mut().zip(reflected.iter()) {
-                *v = *v / 2.0 + r / 2.0;
-            }
-        }
         c
     } else {
         [0.0; 3]
