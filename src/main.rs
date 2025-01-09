@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -102,27 +103,31 @@ impl App {
             self.sun,
         );
 
-        if self.headless && fragment.samples == 1_000 {
+        if self.headless && fragment.samples % 10_000 == 0 {
             fragment.save_image(gpu, format!("frames/{:04}-{:03}.exr", self.iter, self.seq));
-            let (axis, angle) = Quat::from_rotation_arc(
-                Vec3::new(0.8, 1.0, 3.7).normalize(),
-                Vec3::new(0.8, 0.0, 3.7).normalize(),
-            )
-            .to_axis_angle();
-            let quat = Quat::from_axis_angle(axis, 0.01 * angle.signum());
-            self.seq += 1;
-            self.sun = quat * self.sun;
-            if self.sun.y < -0.3 {
-                self.iter += 1;
-                self.sun = Vec3::new(0.8, 10.2743, 3.7).normalize();
-                self.seq = 0;
-            }
+            // let (axis, angle) = Quat::from_rotation_arc(
+            //     Vec3::new(0.8, 1.0, 3.7).normalize(),
+            //     Vec3::new(0.8, 0.0, 3.7).normalize(),
+            // )
+            // .to_axis_angle();
+            // let quat = Quat::from_axis_angle(axis, 0.01 * angle.signum());
+            // self.seq += 1;
+            // self.sun = quat * self.sun;
+            // if self.sun.y < -0.3 {
+            //     self.iter += 1;
+            //     self.sun = Vec3::new(0.8, 10.2743, 3.7).normalize();
+            //     self.seq = 0;
+            // }
             let now = Instant::now();
             println!(
-                "{} paths/px/sec",
-                10.0 * fragment.samples as f64 / (now - self.frame_start).as_secs_f64()
+                "{:.0} paths/px/sec {} samples",
+                10.0 * 10000.0 / (now - self.frame_start).as_secs_f64(),
+                fragment.samples
             );
             self.frame_start = now;
+            // if self.seq == 0 {
+            //     println!("Finished iter {}", self.iter-1);
+            // }
         }
     }
 }
@@ -308,7 +313,14 @@ fn main() {
                 }
 
                 for p in acc.pixels_mut() {
-                    p.apply(|v| v / divisor);
+                    p.apply(|v| {
+                        let v = v / divisor;
+                        if v < 0.0031308 {
+                            v * 12.92
+                        } else {
+                            v.powf(1.0 / 2.4) * 1.055 - 0.055
+                        }
+                    });
                 }
 
                 DynamicImage::ImageRgba32F(acc)
@@ -426,7 +438,7 @@ fn main() {
         yaw: 1.12996435,
         pitch: -0.19000018,
         camera: Vec3::new(34.811836, 114.02207, 74.028244),
-        sun: Vec3::new(0.8, 0.2743, 3.7).normalize(),
+        sun: Vec3::new(0.8, 10.2743, 3.7).normalize(),
         grabbed: false,
         left: false,
         right: false,

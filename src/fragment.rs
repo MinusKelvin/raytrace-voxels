@@ -405,11 +405,7 @@ impl FragmentRaytracer {
         self.prev_pitch = f32::NAN;
     }
 
-    pub(super) fn show(
-        &mut self,
-        gpu: &WgpuState,
-        target: &wgpu::TextureView,
-    ) {
+    pub(super) fn show(&mut self, gpu: &WgpuState, target: &wgpu::TextureView) {
         let show = self.show_pipeline.as_ref().unwrap();
 
         let mut encoder = gpu
@@ -549,7 +545,9 @@ impl FragmentRaytracer {
 
         drop(rp);
 
-        gpu.queue.submit([encoder.finish()]);
+        let index = gpu.queue.submit([encoder.finish()]);
+
+        gpu.device.poll(wgpu::Maintain::wait_for(index));
     }
 
     pub(super) fn save_image(&self, gpu: &WgpuState, path: impl AsRef<Path> + Send + 'static) {
@@ -590,7 +588,7 @@ impl FragmentRaytracer {
                 depth_or_array_layers: 1,
             },
         );
-        gpu.queue.submit([encoder.finish()]);
+        let index = gpu.queue.submit([encoder.finish()]);
 
         buffer
             .clone()
@@ -607,6 +605,8 @@ impl FragmentRaytracer {
                 }
                 image.save(path).unwrap();
             });
+
+        gpu.device.poll(wgpu::Maintain::wait_for(index));
     }
 }
 
