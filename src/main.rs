@@ -110,14 +110,14 @@ impl App {
             self.seq = 5;
             renderer.save_image(gpu, format!("frames/{:04}-{:03}.exr", self.iter, self.seq));
 
-            // let (axis, angle) = Quat::from_rotation_arc(
-            //     Vec3::new(0.8, 1.0, 3.7).normalize(),
-            //     Vec3::new(0.8, 0.0, 3.7).normalize(),
-            // )
-            // .to_axis_angle();
-            // let quat = Quat::from_axis_angle(axis, 0.01 * angle.signum());
-            // self.seq += 1;
-            // self.sun = quat * self.sun;
+            let (axis, angle) = Quat::from_rotation_arc(
+                Vec3::new(0.8, 1.0, 3.7).normalize(),
+                Vec3::new(0.8, 0.0, 3.7).normalize(),
+            )
+            .to_axis_angle();
+            let quat = Quat::from_axis_angle(axis, 0.01 * angle.signum());
+            self.seq += 1;
+            self.sun = quat * self.sun;
 
             let now = Instant::now();
             println!(
@@ -128,22 +128,22 @@ impl App {
             );
             self.frame_start = now;
 
-            if renderer.samples == 10_000 {
-                std::process::exit(0);
+            // if renderer.samples == 10_000 {
+            //     std::process::exit(0);
+            // }
+
+            if self.sun.y < -0.3 {
+                self.iter += 1;
+                self.sun = Vec3::new(0.8, 10.2743, 3.7).normalize();
+                self.seq = 0;
             }
 
-            // if self.sun.y < -0.3 {
-            //     self.iter += 1;
-            //     self.sun = Vec3::new(0.8, 10.2743, 3.7).normalize();
-            //     self.seq = 0;
-            // }
-
-            // if self.seq == 0 {
-            //     println!("Finished iter {}", self.iter - 1);
-            //     if self.iter == 1 {
-            //         std::process::exit(0);
-            //     }
-            // }
+            if self.seq == 0 {
+                println!("Finished iter {}", self.iter - 1);
+                if self.iter == 1 {
+                    std::process::exit(0);
+                }
+            }
         }
     }
 }
@@ -397,10 +397,10 @@ fn main() {
     // space.set(IVec3::new(112, 106, 113), Cell::Empty([0; 2]));
     // space.set(IVec3::new(112, 106, 112), Cell::Empty([0; 2]));
     // space.set(IVec3::new(113, 106, 112), Cell::Empty([0; 2]));
-    // space.set(IVec3::new(113, 102, 113), Cell::Solid([1.0; 3]));
-    // space.set(IVec3::new(112, 102, 113), Cell::Solid([1.0; 3]));
-    // space.set(IVec3::new(112, 102, 112), Cell::Solid([1.0; 3]));
-    // space.set(IVec3::new(113, 102, 112), Cell::Solid([1.0; 3]));
+    space.set(IVec3::new(113, 102, 113), Cell::Solid([1.0; 3]));
+    space.set(IVec3::new(112, 102, 113), Cell::Solid([1.0; 3]));
+    space.set(IVec3::new(112, 102, 112), Cell::Solid([1.0; 3]));
+    space.set(IVec3::new(113, 102, 112), Cell::Solid([1.0; 3]));
     space.set(IVec3::new(110, 90, 110), Cell::Solid([1.0, 0.5, 0.3]));
     space.set(IVec3::new(111, 90, 110), Cell::Solid([1.0, 0.5, 0.3]));
     space.set(IVec3::new(111, 90, 109), Cell::Solid([0.3, 0.5, 1.0]));
@@ -452,9 +452,9 @@ fn main() {
         window: None,
         gpu: None,
 
-        yaw: 0.7599647,
-        pitch: 0.21999985,
-        camera: Vec3::new(104.99523, 95.166374, 102.31405),
+        yaw: -5.770068,
+        pitch: -0.13000016,
+        camera: Vec3::new(38.89386, 100.9141, 75.09488),
         sun: Vec3::new(0.8, 10.2743, 3.7).normalize(),
         grabbed: false,
         left: false,

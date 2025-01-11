@@ -216,6 +216,56 @@ fn sun_pdf(d: vec3<f32>) -> f32 {
     }
 }
 
+const PLANET_RADIUS: f32 = 1000000.0;
+const FOG_HALFLIFE: f32 = 1000.0;
+const FOG_RADIUS: f32 = PLANET_RADIUS + 5 * FOG_HALFLIFE;
+const FOG_FACTOR: f32 = log(2.0) / FOG_HALFLIFE;
+
+fn raycast_planet(start: vec3<f32>, dir: vec3<f32>, sea_level_density: f32) -> RaycastResult {
+    var result: RaycastResult;
+    result.hit = false;
+    result.color = vec4<f32>(0.0);
+    result.distance = 0.0;
+    result.normal = vec3<f32>(0.0);
+
+    var p = start + vec3<f32>(0.0, PLANET_RADIUS, 0.0);
+
+    let b = 2.0 * dot(p, dir);
+    let c = dot(p, p) - FOG_RADIUS*FOG_RADIUS;
+
+    let det = b*b - 4.0 * c;
+    if det < 0.0 {
+        return result;
+    }
+
+    let t0 = max((-b - sqrt(det)) / 2.0, 0.0);
+    let t1 = (-b + sqrt(det)) / 2.0;
+
+    if t1 < 0 {
+        return result;
+    }
+
+    let density_scaled = (t1 - t0) / 10.0 * sea_level_density;
+    var y = -log(1.0 - random().x);
+
+    for (var i = 0; i < 10; i += 1) {
+        let a = f32(i + 1) / 10.0;
+        let t_s = a * t0 + (1 - a) * t1;
+        let altitude = length(p + dir * t_s) - PLANET_RADIUS;
+        let d = density_scaled * exp(-altitude * FOG_FACTOR);
+        if y < d {
+            result.hit = true;
+            result.normal = cos_hemisphere(-dir);
+            result.distance = t_s - (y / d) * (t1 - t0);
+            result.color = vec4<f32>(0.8, 0.8, 0.8, 0.0);
+            break;
+        }
+        y -= d;
+    }
+
+    return result;
+}
+
 fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec3<f32> {
     let wlp1_cubed = (wavelength + 1.0) * (wavelength + 1.0) * (wavelength + 1.0);
     let density = 1.0e-3 / (wlp1_cubed * (wavelength + 1.0));
@@ -228,30 +278,17 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec3<f32> {
 
     // compute indirect lighting
     for (var depth = 0; ; depth += 1) {
-        // compute location ray hit
-        let fog_dist = -log(1.0-random().x)/density;
-
-        const PLANET_RADIUS: f32 = 1000000.0;
-        const FOG_RADIUS: f32 = PLANET_RADIUS + 1000.0;
-        let fog_hit = pos + dir * fog_dist
-            - vec3<f32>(uniforms.size) / 2.0
-            + vec3<f32>(0.0, PLANET_RADIUS, 0.0);
-
-        var ray = raycast(pos, dir, fog_dist);
-        if !ray.hit {
-            // if we escaped the scene, there is no more lighting contribution
-            // if hit.y > FOG_RADIUS {
-            if dot(fog_hit, fog_hit) > FOG_RADIUS * FOG_RADIUS {
-                // special-case initial ray hitting the sun
-                if depth == 0 && (dot(dir, uniforms.sun) > COS_SUN_RADIUS) {
-                    color += light_color * SUN_COLOR;
-                }
-                break;
+        var ray = raycast_planet(pos, dir, density);
+        var ray2 = raycast(pos, dir, select(1.0e12, ray.distance, ray.hit));
+        if ray.hit && ray2.hit && ray2.distance < ray.distance || !ray.hit && ray2.hit {
+            ray = ray2;
+        } else if !ray.hit && !ray2.hit {
+            // special-case initial ray hitting the sun
+            if depth == 0 && (dot(dir, uniforms.sun) > COS_SUN_RADIUS) {
+                color += light_color * SUN_COLOR;
             }
-
-            ray.normal = cos_hemisphere(-dir);
-            ray.distance = fog_dist;
-            ray.color = vec4<f32>(0.8, 0.8, 0.8, 0.0);
+            // we escaped the scene, there is no more lighting contribution
+            break;
         }
 
         pos = pos + dir * ray.distance;
@@ -263,25 +300,22 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec3<f32> {
         // let direct_dir = uniform_hemisphere(-ray.normal);
         let direct_dir = sample_sun();
         // compute visibility
+        // only continue if direction is not into the surface
         if dot(direct_dir, -ray.normal) > 0.0 {
-            // only continue if direction is not into the surface
-            let direct_fog_dist = -log(1.0-random().x)/density;
-            let direct_fog_hit = pos + direct_dir * direct_fog_dist
-                - vec3<f32>(uniforms.size) / 2.0
-                + vec3<f32>(0.0, PLANET_RADIUS, 0.0);
-            if dot(direct_fog_hit, direct_fog_hit) > FOG_RADIUS * FOG_RADIUS {
-                // only continue if we won't hit a fog particle before hitting the sun
-                var direct_ray = raycast(pos, direct_dir, 1.0e20);
-                if !direct_ray.hit {
-                    // hit the sun, so add sun contribution
-                    color += light_color
-                        * SUN_COLOR
-                        * ray.color.rgb
-                        * brdf(dir, direct_dir, -ray.normal)
-                        * dot(-ray.normal, direct_dir) * 2
-                        * PI
-                        * SUN_WEIGHT;
-                }
+            // cast planet and block rays
+            var sun_ray = raycast_planet(pos, direct_dir, density);
+            if !sun_ray.hit {
+                sun_ray = raycast(pos, direct_dir, select(1.0e12, sun_ray.distance, sun_ray.hit));
+            }
+            if !sun_ray.hit {
+                // hit the sun, so add sun contribution
+                color += light_color
+                    * SUN_COLOR
+                    * ray.color.rgb
+                    * brdf(dir, direct_dir, -ray.normal)
+                    * dot(-ray.normal, direct_dir) * 2
+                    * PI
+                    * SUN_WEIGHT;
             }
         }
 
@@ -319,7 +353,7 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec3<f32> {
 fn fragment_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     rng = uniforms.rng ^ bitcast<vec3<u32>>(pos.xyz);
 
-    var ld = 2.0 * (pos.xy - uniforms.vp_size / 2.0) / uniforms.vp_size.y;
+    var ld = 4.0 * (pos.xy - uniforms.vp_size / 2.0) / uniforms.vp_size.y;
     let px_size = vec2<f32>(dpdx(ld.x), dpdy(ld.y));
     var result = vec3<f32>(0.0);
     for (var i = 0; i < 1; i = i + 1) {
