@@ -8,7 +8,8 @@ use glam::{EulerRot, IVec3, Mat3, Quat, Vec3};
 use image::{DynamicImage, Pixel, Rgba32FImage};
 use rand::prelude::*;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use software::SoftwareRaytracer;
+use software::{RayHit, SoftwareRaytracer};
+use svo::SvoSpace;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, StartCause, WindowEvent};
@@ -20,7 +21,7 @@ mod fragment;
 mod software;
 mod svo;
 
-type Raytracer = FragmentRaytracer;
+type Raytracer = SoftwareRaytracer;
 
 struct App {
     gpu: Option<WgpuState>,
@@ -48,7 +49,7 @@ struct App {
     iter: usize,
     frame_start: Instant,
 
-    space: Space,
+    space: SvoSpace,
 
     headless: bool,
 }
@@ -244,6 +245,19 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::KeyS) => self.backward = state,
                     PhysicalKey::Code(KeyCode::Space) => self.up = state,
                     PhysicalKey::Code(KeyCode::ShiftLeft) => self.down = state,
+                    PhysicalKey::Code(KeyCode::KeyG) if state => {
+                        self.camera.y += 100000.0;
+                    }
+                    PhysicalKey::Code(KeyCode::KeyR) if state => {
+                        let (axis, angle) = Quat::from_rotation_arc(
+                            Vec3::new(0.8, 1.0, 3.7).normalize(),
+                            Vec3::new(0.8, 0.0, 3.7).normalize(),
+                        )
+                        .to_axis_angle();
+                        let quat = Quat::from_axis_angle(axis, 0.05 * angle.signum());
+                        self.seq += 1;
+                        self.sun = quat * self.sun;
+                    }
                     _ => {}
                 }
             }
@@ -253,20 +267,24 @@ impl ApplicationHandler for App {
                 ..
             } if self.grabbed => {
                 let looking = glam::Mat3A::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0);
-                let result = software::raycast(&self.space, self.camera, looking.mul_vec3(Vec3::Z));
-                if let Some((_, _, n, p)) = result {
+                let result = dbg!(software::raycast(
+                    &self.space,
+                    self.camera,
+                    looking.mul_vec3(Vec3::Z)
+                ));
+                if let Some(RayHit { hit, normal, .. }) = result {
                     match button {
-                        MouseButton::Left => self.space.set(p, Cell::Empty([0, 0])),
+                        MouseButton::Left => self.space.set(hit, None),
                         MouseButton::Right => {
-                            let np = p - n.as_ivec3();
-                            if self.space.idx(np).is_some() {
-                                self.space.set(np, Cell::Solid([1.0; 3]));
-                            }
+                            let np = hit + normal.as_ivec3();
+                            // if self.space.idx(np).is_some() {
+                            self.space.set(np, Some([1.0; 3]));
+                            // }
                         }
                         _ => {}
                     }
 
-                    self.space.calculate_distances();
+                    // self.space.calculate_distances();
                     renderer.update_space(&gpu, &self.space);
                 }
             }
@@ -351,7 +369,7 @@ fn main() {
         return;
     }
 
-    let mut space = Space::new(IVec3::splat(256));
+    let mut space = SvoSpace::new(IVec3::splat(256));
     let seed = [
         218, 29, 221, 89, 183, 102, 2, 53, 176, 211, 63, 26, 195, 8, 107, 217, 90, 70, 178, 102,
         69, 8, 249, 220, 44, 31, 182, 202, 20, 106, 91, 98,
@@ -365,52 +383,52 @@ fn main() {
                 false => h,
             };
             for y in 0..h {
-                space.set(IVec3::new(x, y, z), Cell::Solid([0.5; 3]));
+                space.set(IVec3::new(x, y, z), Some([0.5; 3]));
             }
             if h != h2 {
-                space.set(IVec3::new(x, h2 - 1, z), Cell::Solid([1.0; 3]));
-            // }
-                space.set(IVec3::new(x, h2, z), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x - 1, h2 - 2, z), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x + 1, h2 - 2, z), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x, h2 - 2, z - 1), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x, h2 - 2, z + 1), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x - 1, h2 - 1, z), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x + 1, h2 - 1, z), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x, h2 - 1, z - 1), Cell::Solid([0.75; 3]));
-                space.set(IVec3::new(x, h2 - 1, z + 1), Cell::Solid([0.75; 3]));
+                space.set(IVec3::new(x, h2 - 1, z), Some([1.0; 3]));
+                // }
+                space.set(IVec3::new(x, h2, z), Some([0.75; 3]));
+                space.set(IVec3::new(x - 1, h2 - 2, z), Some([0.75; 3]));
+                space.set(IVec3::new(x + 1, h2 - 2, z), Some([0.75; 3]));
+                space.set(IVec3::new(x, h2 - 2, z - 1), Some([0.75; 3]));
+                space.set(IVec3::new(x, h2 - 2, z + 1), Some([0.75; 3]));
+                space.set(IVec3::new(x - 1, h2 - 1, z), Some([0.75; 3]));
+                space.set(IVec3::new(x + 1, h2 - 1, z), Some([0.75; 3]));
+                space.set(IVec3::new(x, h2 - 1, z - 1), Some([0.75; 3]));
+                space.set(IVec3::new(x, h2 - 1, z + 1), Some([0.75; 3]));
             }
             if h > 98 {
-                space.set(IVec3::new(x, 98, z), Cell::Solid([1.0, 0.5, 0.3]));
+                space.set(IVec3::new(x, 98, z), Some([1.0, 0.5, 0.3]));
             }
-            // space.set(IVec3::new(x, 255, z), Cell::Solid([1.0; 3]));
+            // space.set(IVec3::new(x, 255, z), Some([1.0; 3]));
         }
     }
     for i in -2..=24 {
         for j in -2..=24 {
-            space.set(IVec3::new(i + 100, 103, j + 100), Cell::Solid([1.0, 0.1, 0.1]));
-            space.set(IVec3::new(i + 100, 103, j + 100), Cell::Solid([1.0, 0.1, 0.1]));
-            space.set(IVec3::new(i + 100, 103, j + 100), Cell::Solid([1.0, 0.1, 0.1]));
+            space.set(IVec3::new(i + 100, 103, j + 100), Some([1.0, 0.1, 0.1]));
+            space.set(IVec3::new(i + 100, 103, j + 100), Some([1.0, 0.1, 0.1]));
+            space.set(IVec3::new(i + 100, 103, j + 100), Some([1.0, 0.1, 0.1]));
         }
     }
     // space.set(IVec3::new(113, 106, 113), Cell::Empty([0; 2]));
     // space.set(IVec3::new(112, 106, 113), Cell::Empty([0; 2]));
     // space.set(IVec3::new(112, 106, 112), Cell::Empty([0; 2]));
     // space.set(IVec3::new(113, 106, 112), Cell::Empty([0; 2]));
-    space.set(IVec3::new(113, 102, 113), Cell::Solid([1.0; 3]));
-    space.set(IVec3::new(112, 102, 113), Cell::Solid([1.0; 3]));
-    space.set(IVec3::new(112, 102, 112), Cell::Solid([1.0; 3]));
-    space.set(IVec3::new(113, 102, 112), Cell::Solid([1.0; 3]));
-    space.set(IVec3::new(110, 90, 110), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(111, 90, 110), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(111, 90, 109), Cell::Solid([0.3, 0.5, 1.0]));
-    space.set(IVec3::new(110, 90, 109), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(111, 90, 108), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(110, 90, 108), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(112, 90, 110), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(112, 90, 109), Cell::Solid([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(112, 90, 108), Cell::Solid([1.0, 0.5, 0.3]));
-    space.calculate_distances();
+    space.set(IVec3::new(113, 102, 113), Some([1.0; 3]));
+    space.set(IVec3::new(112, 102, 113), Some([1.0; 3]));
+    space.set(IVec3::new(112, 102, 112), Some([1.0; 3]));
+    space.set(IVec3::new(113, 102, 112), Some([1.0; 3]));
+    space.set(IVec3::new(110, 90, 110), Some([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(111, 90, 110), Some([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(111, 90, 109), Some([0.3, 0.5, 1.0]));
+    space.set(IVec3::new(110, 90, 109), Some([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(111, 90, 108), Some([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(110, 90, 108), Some([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(112, 90, 110), Some([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(112, 90, 109), Some([1.0, 0.5, 0.3]));
+    space.set(IVec3::new(112, 90, 108), Some([1.0, 0.5, 0.3]));
+    // space.calculate_distances();
 
     // println!("making svo");
     // let t = Instant::now();
@@ -486,8 +504,6 @@ fn main() {
     } else {
         EventLoop::new().unwrap().run_app(&mut app).unwrap();
     }
-
-    // let mut software = software::SoftwareRaytracer::new(&gpu, &space);
 }
 
 struct WgpuState {
@@ -711,9 +727,7 @@ impl ShowPipeline {
                             binding: 0,
                             visibility: wgpu::ShaderStages::FRAGMENT,
                             ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float {
-                                    filterable: false,
-                                },
+                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
                                 view_dimension: wgpu::TextureViewDimension::D2,
                                 multisampled: false,
                             },
@@ -759,33 +773,33 @@ impl ShowPipeline {
             .device
             .create_shader_module(wgpu::include_wgsl!("copy.wgsl"));
 
-        let copy_pipeline =
-            gpu.device
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: None,
-                    layout: Some(&cp_layout),
-                    vertex: wgpu::VertexState {
-                        module: &copy_shader,
-                        entry_point: None,
-                        buffers: &[],
-                        compilation_options: Default::default(),
-                    },
-                    primitive: wgpu::PrimitiveState::default(),
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: &copy_shader,
-                        entry_point: None,
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: config.format,
-                            blend: None,
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                        compilation_options: Default::default(),
-                    }),
-                    multiview: None,
-                    cache: None,
-                });
+        let copy_pipeline = gpu
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&cp_layout),
+                vertex: wgpu::VertexState {
+                    module: &copy_shader,
+                    entry_point: None,
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &copy_shader,
+                    entry_point: None,
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
 
         Some(ShowPipeline {
             copy_bind_group_layout,

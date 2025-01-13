@@ -217,8 +217,8 @@ fn sun_pdf(d: vec3<f32>) -> f32 {
 }
 
 const PLANET_RADIUS: f32 = 6371000.0;
-const FOG_HALFLIFE: f32 = 10400.0;
-const FOG_RADIUS: f32 = PLANET_RADIUS + 5 * FOG_HALFLIFE;
+const FOG_HALFLIFE: f32 = 10400.0 / log(2.0);
+const FOG_RADIUS: f32 = PLANET_RADIUS + 10 * FOG_HALFLIFE;
 const FOG_FACTOR: f32 = log(2.0) / FOG_HALFLIFE;
 
 fn raycast_planet(start: vec3<f32>, dir: vec3<f32>, sea_level_density: f32) -> RaycastResult {
@@ -254,11 +254,11 @@ fn raycast_planet(start: vec3<f32>, dir: vec3<f32>, sea_level_density: f32) -> R
             result.hit = true;
             result.distance = t1;
             result.normal = -normalize(p + dir * t1);
-            result.color = vec4<f32>(0.5);
+            result.color = vec4<f32>(0.0);
         }
     }
 
-    const N: i32 = 100;
+    const N: i32 = 1000;
 
     let density_scaled = (t1 - t0) / f32(N) * sea_level_density;
     var y = -log(1.0 - random().x);
@@ -273,8 +273,8 @@ fn raycast_planet(start: vec3<f32>, dir: vec3<f32>, sea_level_density: f32) -> R
         if y < d {
             result.hit = true;
             result.normal = cos_hemisphere(-dir);
-            result.distance = (y/d) * t0 + (1 - y/d) * t1;
-            result.color = vec4<f32>(0.8, 0.8, 0.8, 0.0);
+            result.distance = (y/d) * t_s0 + (1 - y/d) * t_s1;
+            result.color = vec4<f32>(1.0, 1.0, 1.0, 0.0);
             break;
         }
         y -= d;
@@ -284,8 +284,9 @@ fn raycast_planet(start: vec3<f32>, dir: vec3<f32>, sea_level_density: f32) -> R
 }
 
 fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec3<f32> {
+    let wl = wavelength*400.0e-9 + 400.0e-9;
+    let density = 8.346829234302236e-05 / (7.512000000000001e+25*wl*wl*wl*wl);
     let wlp1_cubed = (wavelength + 1.0) * (wavelength + 1.0) * (wavelength + 1.0);
-    let density = 1.0e-4 / (wlp1_cubed * (wavelength + 1.0));
     var color = vec3<f32>(0.0);
     var light_color = textureSample(wl_to_color_tex, wl_to_color_samp, wavelength).rgb
         * 1.0 / (wlp1_cubed * (exp(0.1 / (wavelength + 1.0)) - 1.0))

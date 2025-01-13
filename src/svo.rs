@@ -12,8 +12,8 @@ pub struct SvoSpace {
     hash: HashMap<SvoCell, Node>,
     cells: SlotMap<Node, RcSvoCell>,
     root: Option<Node>,
-    size: IVec3,
-    height: u32,
+    pub size: IVec3,
+    pub height: u32,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -142,8 +142,8 @@ impl SvoSpace {
         self.root = new_node;
     }
 
-    pub fn get_node(&self, node: Node) -> SvoCell {
-        self.cells[node].cell.clone()
+    pub fn get_node(&self, node: Node) -> &SvoCell {
+        &self.cells[node].cell
     }
 
     pub fn root_node(&self) -> Option<Node> {
@@ -157,7 +157,7 @@ impl SvoSpace {
 }
 
 impl SvoCell {
-    fn unwrap_children(&self) -> &[Option<Node>; 8] {
+    pub fn unwrap_children(&self) -> &[Option<Node>; 8] {
         match self {
             SvoCell::Block(_) => unreachable!(),
             SvoCell::Children(children) => children,
