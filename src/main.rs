@@ -21,7 +21,7 @@ mod fragment;
 mod software;
 mod svo;
 
-type Raytracer = SoftwareRaytracer;
+type Raytracer = FragmentRaytracer;
 
 struct App {
     gpu: Option<WgpuState>,
@@ -74,8 +74,6 @@ impl App {
         self.times[self.framecount % self.times.len()] = delta;
         let delta = delta.as_secs_f32();
         self.last_time = now;
-
-        if self.framecount == 5000 {}
         self.framecount += 1;
 
         let mut d = Vec3::ZERO;
@@ -179,8 +177,8 @@ impl ApplicationHandler for App {
             return;
         };
 
-        let total_time = self.times.iter().copied().sum::<Duration>();
-        let fps = self.times.len() as f64 / total_time.as_secs_f64();
+        let total_time = self.times.iter().copied().take(self.framecount).sum::<Duration>();
+        let fps = (self.times.len().min(self.framecount)) as f64 / total_time.as_secs_f64();
         window.set_title(&format!(
             "{} samples, {fps:.0}/sec",
             renderer.samples as i32
@@ -277,14 +275,11 @@ impl ApplicationHandler for App {
                         MouseButton::Left => self.space.set(hit, None),
                         MouseButton::Right => {
                             let np = hit + normal.as_ivec3();
-                            // if self.space.idx(np).is_some() {
                             self.space.set(np, Some([1.0; 3]));
-                            // }
                         }
                         _ => {}
                     }
 
-                    // self.space.calculate_distances();
                     renderer.update_space(&gpu, &self.space);
                 }
             }

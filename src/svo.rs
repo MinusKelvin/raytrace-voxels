@@ -142,6 +142,14 @@ impl SvoSpace {
         self.root = new_node;
     }
 
+    pub fn capacity(&self) -> usize {
+        self.cells.capacity()
+    }
+
+    pub fn nodes(&self) -> impl Iterator<Item = (Node, &SvoCell)> {
+        self.cells.iter().map(|(n, rc_cell)| (n, &rc_cell.cell))
+    }
+
     pub fn get_node(&self, node: Node) -> &SvoCell {
         &self.cells[node].cell
     }

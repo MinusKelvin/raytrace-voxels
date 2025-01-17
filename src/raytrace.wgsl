@@ -10,14 +10,19 @@ var<private> coords: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
 struct Uniforms {
     looking: mat3x3<f32>,
     pos: vec3<f32>,
-    size: vec3<i32>,
     sun: vec3<f32>,
     vp_size: vec2<f32>,
     rng: vec3<u32>,
+    root: u32,
+    height: u32,
 };
 
+struct Node {
+    children: array<u32, 8>
+}
+
 struct Space {
-    voxels: array<u32>,
+    nodes: array<Node>,
 };
 
 @group(0) @binding(0)
@@ -45,92 +50,122 @@ struct RaycastResult {
     normal: vec3<f32>,
 };
 
-const EPS: f32 = 0.0000001;
+const EPS: f32 = 1.0e-6;
 const PI: f32 = 3.1415926535;
 
-fn raycast(start: vec3<f32>, d_: vec3<f32>, limit: f32) -> RaycastResult {
+fn hmax(v: vec3<f32>) -> f32 {
+    return max(v.x, max(v.y, v.z));
+}
+
+fn hmin(v: vec3<f32>) -> f32 {
+    return min(v.x, min(v.y, v.z));
+}
+
+fn to_bits(v: vec3<bool>) -> u32 {
+    return u32(v.x) | u32(v.y) << 1u | u32(v.z) << 2u;
+}
+
+fn raycast(start_: vec3<f32>, d_: vec3<f32>, distance: f32) -> RaycastResult {
     var result: RaycastResult;
     result.hit = false;
     result.color = vec4<f32>(0.0);
     result.distance = 0.0;
     result.normal = vec3<f32>(0.0);
 
-    var d = d_;
-    if abs(d.x) < EPS {
-        if d.x >= 0.0 {
-            d.x = EPS;
-        } else {
-            d.x = -EPS;
-        }
-    }
-    if abs(d.y) < EPS {
-        if d.y >= 0.0 {
-            d.y = EPS;
-        } else {
-            d.y = -EPS;
-        }
-    }
-    if abs(d.z) < EPS {
-        if d.z >= 0.0 {
-            d.z = EPS;
-        } else {
-            d.z = -EPS;
-        }
-    }
+    let flip = d_ < vec3<f32>(0.0);
+    let d_sign = sign(d_);
+    let mirror_mask = to_bits(flip);
+    let d = max(abs(d_), vec3<f32>(EPS));
+    let space_bound = vec3<f32>(f32(1u << uniforms.height));
+    let start = select(start_, space_bound - start_, flip);
 
-    let bits_offset = u32(d.y < 0.0) * 12u;
-    let step_f = sign(d);
-    let t_delta = step_f / d;
-    let fudge = (1.0 + step_f) / 2.0;
-    var t_curr = t_delta * (fudge - fract(start) * step_f - 1.0);
-    var p = vec3<i32>(floor(start));
-    var empty_size = 1.0;
-    let step = vec3<i32>(step_f);
-    for (var i = 0; i < 512; i = i + 1) {
-        let t_max = t_curr + t_delta * empty_size;
-        let t = min(t_max.x, min(t_max.y, t_max.z));
-        if t > limit {
-            break;
-        }
-        var f = vec3<f32>(0.0, 0.0, 0.0);
-        var step_size = (t - t_curr) / t_delta;
-        if t_max.x < t_max.y {
-            if t_max.x < t_max.z {
-                step_size.x = empty_size;
-                f.x = f32(step.x);
-            } else {
-                step_size.z = empty_size;
-                f.z = f32(step.z);
-            }
-        } else {
-            if t_max.y < t_max.z {
-                step_size.y = empty_size;
-                f.y = f32(step.y);
-            } else {
-                step_size.z = empty_size;
-                f.z = f32(step.z);
-            }
-        }
-        t_curr = t_curr + t_delta * floor(step_size);
-        p = p + step * vec3<i32>(step_size);
+    var t = max(hmax(-start / d), 0.0);
+    var enter_dir = vec3<bool>(false);
 
-        if any(p < vec3<i32>(0, 0, 0)) {
-            empty_size = f32(-min(p.x, min(p.y, p.z)));
-        } else if any(p >= uniforms.size) {
-            let tmp = p - uniforms.size;
-            empty_size = f32(max(tmp.x, max(tmp.y, tmp.z)) + 1);
-        } else {
-            let voxel = space.voxels[(p.x * uniforms.size.y + p.y) * uniforms.size.z + p.z];
-            if (voxel & 0xFF000000u) != 0u {
+    var height = uniforms.height;
+    var stack_node: array<u32, 32>;
+    var stack_t_midplanes: array<vec3<f32>, 32>;
+    var stack_subvoxel: array<vec3<bool>, 32>;
+    var stack_t_end: array<f32, 32>;
+    var stack_offset: array<vec3<f32>, 32>;
+
+    stack_node[height] = uniforms.root;
+    stack_t_end[height] = min(hmin((space_bound - start) / d), distance);
+    stack_t_midplanes[height] = (vec3<f32>(f32(1u << height - 1)) - start) / d;
+    stack_subvoxel[height] = stack_t_midplanes[height] < vec3<f32>(t);
+    if stack_t_end[height] < t {
+        return result;
+    }
+    height -= 1u;
+    stack_node[height] = 0xFFFFFFFFu;
+
+    while height <= uniforms.height {
+        if stack_node[height] == 0xFFFFFFFFu {
+            let subvoxel = stack_subvoxel[height + 1u];
+            let p_midplanes = vec3<f32>(f32(1u << height));
+            let offset = stack_offset[height + 1u] + select(vec3<f32>(0.0), p_midplanes, subvoxel);
+
+            let node = space.nodes[stack_node[height + 1u]]
+                .children[to_bits(subvoxel) ^ mirror_mask];
+            if node == 0xFFFFFFFFu {
+                height += 1u;
+                continue;
+            };
+
+            if height == 0 {
+                if t == 0.0 {
+                    height += 1u;
+                    continue;
+                }
                 result.hit = true;
-                result.color = unpack4x8unorm(voxel);
+                result.color = vec4<f32>(
+                    bitcast<f32>(space.nodes[node].children[0]),
+                    bitcast<f32>(space.nodes[node].children[1]),
+                    bitcast<f32>(space.nodes[node].children[2]),
+                    1.0,
+                );
                 result.distance = t;
-                result.normal = f;
+                result.normal = -select(vec3<f32>(0.0), d_sign, enter_dir);
                 break;
-            } else {
-                empty_size = f32(extractBits(voxel, bits_offset, 12u));
             }
+
+            let midplanes = vec3<f32>(f32(1u << height - 1u));
+            stack_t_midplanes[height] = (offset + midplanes - start) / d;
+            stack_t_end[height] = min(hmin((offset + midplanes * 2.0 - start) / d), distance);
+            stack_node[height] = node;
+            stack_offset[height] = offset;
+            stack_subvoxel[height] = stack_t_midplanes[height] < vec3<f32>(t);
+            height -= 1u;
+            stack_node[height] = 0xFFFFFFFFu;
+            continue;
+        };
+
+        let t_next = select(
+            stack_t_midplanes[height],
+            vec3<f32>(stack_t_end[height]),
+            stack_subvoxel[height]
+        );
+        let min = hmin(t_next);
+
+        if min == stack_t_end[height] {
+            height += 1u;
+            continue;
+        } else if min == t_next.x {
+            t = t_next.x;
+            stack_subvoxel[height].x = true;
+            enter_dir = vec3<bool>(true, false, false);
+        } else if min == t_next.y {
+            t = t_next.y;
+            stack_subvoxel[height].y = true;
+            enter_dir = vec3<bool>(false, true, false);
+        } else if min == t_next.z {
+            t = t_next.z;
+            stack_subvoxel[height].z = true;
+            enter_dir = vec3<bool>(false, false, true);
         }
+
+        height -= 1u;
+        stack_node[height] = 0xFFFFFFFFu;
     }
 
     return result;
@@ -253,7 +288,7 @@ fn raycast_planet(start: vec3<f32>, dir: vec3<f32>, sea_level_density: f32) -> R
             t1 = t0_planet;
             result.hit = true;
             result.distance = t1;
-            result.normal = -normalize(p + dir * t1);
+            result.normal = normalize(p + dir * t1);
             result.color = vec4<f32>(0.0);
         }
     }
@@ -272,7 +307,7 @@ fn raycast_planet(start: vec3<f32>, dir: vec3<f32>, sea_level_density: f32) -> R
         let d = density_scaled * exp(-altitude * FOG_FACTOR);
         if y < d {
             result.hit = true;
-            result.normal = cos_hemisphere(-dir);
+            result.normal = cos_hemisphere(dir);
             result.distance = (y/d) * t_s0 + (1 - y/d) * t_s1;
             result.color = vec4<f32>(1.0, 1.0, 1.0, 0.0);
             break;
@@ -316,12 +351,12 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec3<f32> {
         // L_r = L_direct + L_indirect
 
         // compute L_direct
-        // let direct_dir = cos_hemisphere(-ray.normal);
-        // let direct_dir = uniform_hemisphere(-ray.normal);
+        // let direct_dir = cos_hemisphere(ray.normal);
+        // let direct_dir = uniform_hemisphere(ray.normal);
         let sun_dir = sample_sun();
         // compute visibility
         // only continue if direction is not into the surface
-        if dot(sun_dir, -ray.normal) > 0.0 {
+        if dot(sun_dir, ray.normal) > 0.0 {
             // cast planet and block rays
             var sun_ray = raycast_planet(pos, sun_dir, density);
             if !sun_ray.hit {
@@ -332,8 +367,8 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec3<f32> {
                 color += light_color
                     * SUN_COLOR
                     * ray.color.rgb
-                    * brdf(dir, sun_dir, -ray.normal)
-                    * dot(-ray.normal, sun_dir) * 2
+                    * brdf(dir, sun_dir, ray.normal)
+                    * dot(ray.normal, sun_dir) * 2
                     * PI
                     * SUN_WEIGHT;
             }
@@ -344,12 +379,12 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec3<f32> {
         if all(ray.color == vec4<f32>(1.0)) {
             color += light_color * 10.0 * ray.color.rgb * ray.color.a;
         }
-        let indirect_dir = cos_hemisphere(-ray.normal);
-        // let indirect_dir = uniform_hemisphere(-ray.normal);
+        let indirect_dir = cos_hemisphere(ray.normal);
+        // let indirect_dir = uniform_hemisphere(ray.normal);
         // L_indirect contribution is recursive, so we will recurse here.
         light_color *= ray.color.rgb
-            * brdf(dir, indirect_dir, -ray.normal)
-            // * dot(-ray.normal, indirect_dir) * 2
+            * brdf(dir, indirect_dir, ray.normal)
+            // * dot(ray.normal, indirect_dir) * 2
             * PI;
         dir = indirect_dir;
 
@@ -381,6 +416,7 @@ fn fragment_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         let rnd = (rng.xy - 0.5) * px_size + ld;
         var d = uniforms.looking * normalize(vec3<f32>(rnd.x, -rnd.y, 1.0));
         result = result + raytrace(uniforms.pos, d, rng.z);
+        // result = raycast(uniforms.pos, d, 1.0e24).color.rgb;
     }
     return vec4<f32>(result / 1.0, 0.0);
 }

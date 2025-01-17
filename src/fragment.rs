@@ -1,3 +1,4 @@
+use std::iter::zip;
 use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::Arc;
@@ -6,9 +7,11 @@ use bytemuck::{Pod, Zeroable};
 use glam::{EulerRot, IVec3, Mat3, Vec2, Vec3, Vec4};
 use image::{Rgba32FImage, RgbaImage};
 use rand::prelude::*;
+use slotmap::Key;
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 
+use crate::svo::SvoSpace;
 use crate::{Cell, ShowPipeline, Space, WgpuState};
 
 pub struct FragmentRaytracer {
@@ -17,6 +20,7 @@ pub struct FragmentRaytracer {
     uniform_buffer: wgpu::Buffer,
     space_buffer: wgpu::Buffer,
     space_group: wgpu::BindGroup,
+    space_group_layout: wgpu::BindGroupLayout,
     wl_to_color_group: wgpu::BindGroup,
     accumulator: wgpu::Texture,
     accumulator_desc: wgpu::TextureDescriptor<'static>,
@@ -32,7 +36,7 @@ pub struct FragmentRaytracer {
 }
 
 impl FragmentRaytracer {
-    pub(super) fn new(gpu: &WgpuState, space: &Space) -> Self {
+    pub(super) fn new(gpu: &WgpuState, space: &SvoSpace) -> Self {
         let shader = gpu
             .device
             .create_shader_module(wgpu::include_wgsl!("raytrace.wgsl"));
@@ -142,25 +146,11 @@ impl FragmentRaytracer {
             ],
         });
 
-        let buffer: Vec<_> = space
-            .voxels
-            .iter()
-            .map(|&v| match v {
-                Cell::Solid(a) => [
-                    (a[0] * 255.0) as u8,
-                    (a[1] * 255.0) as u8,
-                    (a[2] * 255.0) as u8,
-                    255,
-                ],
-                Cell::Empty([up, down]) => (up | down << 12).to_le_bytes(),
-            })
-            .collect();
-
         let space_buffer = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
-                contents: bytemuck::cast_slice(&buffer),
+                contents: &[0; 64],
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             });
 
@@ -258,12 +248,13 @@ impl FragmentRaytracer {
 
         let show_pipeline = ShowPipeline::new(gpu, &accumulator_view);
 
-        FragmentRaytracer {
+        let mut this = FragmentRaytracer {
             pipeline,
             uniform_group,
             uniform_buffer,
             space_buffer,
             space_group,
+            space_group_layout,
             wl_to_color_group,
             accumulator,
             accumulator_desc,
@@ -275,26 +266,48 @@ impl FragmentRaytracer {
             prev_pos: Vec3::ZERO,
             prev_size: gpu.size,
             prev_sun: Vec3::ZERO,
-        }
+        };
+        this.update_space(gpu, space);
+        this
     }
 
-    pub(super) fn update_space(&mut self, gpu: &WgpuState, space: &Space) {
-        let buffer: Vec<_> = space
-            .voxels
-            .iter()
-            .map(|&v| match v {
-                Cell::Solid(a) => [
-                    (a[0] * 255.0) as u8,
-                    (a[1] * 255.0) as u8,
-                    (a[2] * 255.0) as u8,
-                    255,
-                ],
-                Cell::Empty([up, down]) => (up | down << 12).to_le_bytes(),
-            })
-            .collect();
+    pub(super) fn update_space(&mut self, gpu: &WgpuState, space: &SvoSpace) {
+        let mut buffer = vec![[!0; 8]; space.capacity()];
+        for (idx, value) in space.nodes() {
+            let idx = idx.data().as_ffi() as u32 as usize;
+            match value {
+                crate::svo::SvoCell::Block(color) => {
+                    for (buf, color) in zip(&mut buffer[idx], color) {
+                        *buf = color.0.to_bits();
+                    }
+                }
+                crate::svo::SvoCell::Children(children) => {
+                    for (buf, child) in zip(&mut buffer[idx], children) {
+                        *buf = child.map_or(!0, |n| n.data().as_ffi() as u32);
+                    }
+                }
+            }
+        }
 
-        gpu.queue
-            .write_buffer(&self.space_buffer, 0, bytemuck::cast_slice(&buffer));
+        let space_buffer = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&buffer),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let space_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.space_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: space_buffer.as_entire_binding(),
+            }],
+        });
+
+        self.space_group = space_group;
+        self.space_buffer = space_buffer;
 
         self.prev_pitch = f32::NAN;
     }
@@ -309,7 +322,7 @@ impl FragmentRaytracer {
     pub(super) fn sample(
         &mut self,
         gpu: &WgpuState,
-        space: &Space,
+        space: &SvoSpace,
         camera: Vec3,
         yaw: f32,
         pitch: f32,
@@ -358,15 +371,15 @@ impl FragmentRaytracer {
                 looking.z_axis.extend(0.0),
             ],
             pos: camera,
-            size: space.size,
             sun,
             vp_size: Vec2::new(gpu.size.width as f32, gpu.size.height as f32),
             rng: thread_rng().gen(),
+            height: space.height,
+            root: space.root_node().map_or(!0, |n| n.data().as_ffi() as u32),
             _padding0: 0,
             _padding1: 0,
-            _padding2: 0,
-            _padding3: [0; 2],
-            _padding4: 0,
+            _padding2: [0; 2],
+            _padding3: [0; 3],
         };
         gpu.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -467,12 +480,12 @@ struct Uniforms {
     looking: [Vec4; 3],
     pos: Vec3,
     _padding0: u32,
-    size: IVec3,
-    _padding1: u32,
     sun: Vec3,
-    _padding2: u32,
+    _padding1: u32,
     vp_size: Vec2,
-    _padding3: [u32; 2],
+    _padding2: [u32; 2],
     rng: [u32; 3],
-    _padding4: u32,
+    root: u32,
+    height: u32,
+    _padding3: [u32; 3],
 }
