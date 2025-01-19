@@ -65,6 +65,8 @@ fn to_bits(v: vec3<bool>) -> u32 {
     return u32(v.x) | u32(v.y) << 1u | u32(v.z) << 2u;
 }
 
+var<private> error: bool;
+
 fn raycast(start_: vec3<f32>, d_: vec3<f32>, distance: f32) -> RaycastResult {
     var result: RaycastResult;
     result.hit = false;
@@ -79,8 +81,16 @@ fn raycast(start_: vec3<f32>, d_: vec3<f32>, distance: f32) -> RaycastResult {
     let space_bound = vec3<f32>(f32(1u << uniforms.height));
     let start = select(start_, space_bound - start_, flip);
 
-    var t = max(hmax(-start / d), 0.0);
+    let enter = -start / d;
+    var t = max(hmax(enter), 0.0);
     var enter_dir = vec3<bool>(false);
+    if enter.x == t {
+        enter_dir.x = true;
+    } else if enter.y == t {
+        enter_dir.y = true;
+    } else if enter.z == t {
+        enter_dir.z = true;
+    }
 
     var height = uniforms.height;
     var stack_node: array<u32, 32>;
@@ -99,7 +109,13 @@ fn raycast(start_: vec3<f32>, d_: vec3<f32>, distance: f32) -> RaycastResult {
     height -= 1u;
     stack_node[height] = 0xFFFFFFFFu;
 
+    var iters = 0;
     while height <= uniforms.height {
+        if iters >= 10000 {
+            error = true;
+            break;
+        }
+        iters += 1;
         if stack_node[height] == 0xFFFFFFFFu {
             let subvoxel = stack_subvoxel[height + 1u];
             let p_midplanes = vec3<f32>(f32(1u << height));
@@ -289,7 +305,7 @@ fn raycast_planet(start: vec3<f32>, dir: vec3<f32>, sea_level_density: f32) -> R
             result.hit = true;
             result.distance = t1;
             result.normal = normalize(p + dir * t1);
-            result.color = vec4<f32>(0.0);
+            result.color = vec4<f32>(0.25, 0.25, 0.25, 0.0);
         }
     }
 
@@ -331,6 +347,11 @@ fn raytrace(start: vec3<f32>, d: vec3<f32>, wavelength: f32) -> vec3<f32> {
 
     // compute indirect lighting
     for (var depth = 0; ; depth += 1) {
+        if depth >= 25 || error {
+            error = true;
+            break;
+        }
+
         var ray = raycast_planet(pos, dir, density);
         var ray2 = raycast(pos, dir, select(1.0e12, ray.distance, ray.hit));
         if ray2.hit {
@@ -417,6 +438,9 @@ fn fragment_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         var d = uniforms.looking * normalize(vec3<f32>(rnd.x, -rnd.y, 1.0));
         result = result + raytrace(uniforms.pos, d, rng.z);
         // result = raycast(uniforms.pos, d, 1.0e24).color.rgb;
+        if error {
+            return vec4<f32>(1.0e9, -1.0e9, 1.0e9, 0.0);
+        }
     }
     return vec4<f32>(result / 1.0, 0.0);
 }

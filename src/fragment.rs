@@ -4,15 +4,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{EulerRot, IVec3, Mat3, Vec2, Vec3, Vec4};
-use image::{Rgba32FImage, RgbaImage};
+use glam::{EulerRot, Mat3, Vec2, Vec3, Vec4};
+use image::Rgba32FImage;
 use rand::prelude::*;
 use slotmap::Key;
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 
 use crate::svo::SvoSpace;
-use crate::{Cell, ShowPipeline, Space, WgpuState};
+use crate::{ShowPipeline, WgpuState};
 
 pub struct FragmentRaytracer {
     pipeline: wgpu::RenderPipeline,
@@ -374,7 +374,7 @@ impl FragmentRaytracer {
             sun,
             vp_size: Vec2::new(gpu.size.width as f32, gpu.size.height as f32),
             rng: thread_rng().gen(),
-            height: space.height,
+            height: space.height() as u32,
             root: space.root_node().map_or(!0, |n| n.data().as_ffi() as u32),
             _padding0: 0,
             _padding1: 0,

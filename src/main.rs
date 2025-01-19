@@ -1,11 +1,9 @@
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fragment::FragmentRaytracer;
 use glam::{EulerRot, IVec3, Mat3, Quat, Vec3};
-use image::{DynamicImage, Pixel, Rgba32FImage};
+use image::{DynamicImage, Pixel};
 use rand::prelude::*;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use software::{RayHit, SoftwareRaytracer};
@@ -20,6 +18,7 @@ use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 mod fragment;
 mod software;
 mod svo;
+mod worldgen;
 
 type Raytracer = FragmentRaytracer;
 
@@ -40,6 +39,7 @@ struct App {
     backward: bool,
     up: bool,
     down: bool,
+    fast: bool,
 
     last_time: Instant,
     times: [Duration; 250],
@@ -91,8 +91,12 @@ impl App {
         }
         let dir = Mat3::from_euler(EulerRot::YXZ, self.yaw, 0.0, 0.0);
         if self.grabbed {
-            self.camera += dir * d.normalize_or_zero() * delta * 10.0;
-            self.camera.y += (self.up as i32 - self.down as i32) as f32 * delta * 10.0;
+            let speed = match self.fast {
+                true => 1000.0,
+                false => 10.0,
+            };
+            self.camera += dir * d.normalize_or_zero() * delta * speed;
+            self.camera.y += (self.up as i32 - self.down as i32) as f32 * delta * speed;
         }
 
         // let sw_cmd = software.render(&gpu, &view, &space, camera, yaw, pitch);
@@ -105,18 +109,18 @@ impl App {
             self.sun,
         );
 
-        if self.headless && renderer.samples % 1_000 == 0 {
-            self.seq = 5;
+        if self.headless && renderer.samples % 1_00 == 0 {
+            self.seq = 6;
             renderer.save_image(gpu, format!("frames/{:04}-{:03}.exr", self.iter, self.seq));
 
-            let (axis, angle) = Quat::from_rotation_arc(
-                Vec3::new(0.8, 1.0, 3.7).normalize(),
-                Vec3::new(0.8, 0.0, 3.7).normalize(),
-            )
-            .to_axis_angle();
-            let quat = Quat::from_axis_angle(axis, 0.01 * angle.signum());
-            self.seq += 1;
-            self.sun = quat * self.sun;
+            // let (axis, angle) = Quat::from_rotation_arc(
+            //     Vec3::new(0.8, 1.0, 3.7).normalize(),
+            //     Vec3::new(0.8, 0.0, 3.7).normalize(),
+            // )
+            // .to_axis_angle();
+            // let quat = Quat::from_axis_angle(axis, 0.01 * angle.signum());
+            // self.seq += 1;
+            // self.sun = quat * self.sun;
 
             let now = Instant::now();
             println!(
@@ -127,9 +131,9 @@ impl App {
             );
             self.frame_start = now;
 
-            // if renderer.samples == 10_000 {
-            //     std::process::exit(0);
-            // }
+            if renderer.samples == 10_000 {
+                std::process::exit(0);
+            }
 
             if self.sun.y < -0.3 {
                 self.iter += 1;
@@ -177,7 +181,12 @@ impl ApplicationHandler for App {
             return;
         };
 
-        let total_time = self.times.iter().copied().take(self.framecount).sum::<Duration>();
+        let total_time = self
+            .times
+            .iter()
+            .copied()
+            .take(self.framecount)
+            .sum::<Duration>();
         let fps = (self.times.len().min(self.framecount)) as f64 / total_time.as_secs_f64();
         window.set_title(&format!(
             "{} samples, {fps:.0}/sec",
@@ -243,6 +252,7 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::KeyS) => self.backward = state,
                     PhysicalKey::Code(KeyCode::Space) => self.up = state,
                     PhysicalKey::Code(KeyCode::ShiftLeft) => self.down = state,
+                    PhysicalKey::Code(KeyCode::ControlLeft) => self.fast = state,
                     PhysicalKey::Code(KeyCode::KeyG) if state => {
                         self.camera.y += 100000.0;
                     }
@@ -364,110 +374,15 @@ fn main() {
         return;
     }
 
-    let mut space = SvoSpace::new(IVec3::splat(256));
-    let seed = [
-        218, 29, 221, 89, 183, 102, 2, 53, 176, 211, 63, 26, 195, 8, 107, 217, 90, 70, 178, 102,
-        69, 8, 249, 220, 44, 31, 182, 202, 20, 106, 91, 98,
-    ];
-    let mut rng = rand::rngs::StdRng::from_seed(seed);
-    for x in 1..space.size.x - 1 {
-        for z in 1..space.size.z - 1 {
-            let h = ((x as f32 / 10.0).sin() * 3.0 + (z as f32 / 10.0).sin() * 6.0) as i32 + 96;
-            let h2 = match rng.gen_bool(0.002) {
-                true => h + 10,
-                false => h,
-            };
-            for y in 0..h {
-                space.set(IVec3::new(x, y, z), Some([0.5; 3]));
-            }
-            if h != h2 {
-                space.set(IVec3::new(x, h2 - 1, z), Some([1.0; 3]));
-                // }
-                space.set(IVec3::new(x, h2, z), Some([0.75; 3]));
-                space.set(IVec3::new(x - 1, h2 - 2, z), Some([0.75; 3]));
-                space.set(IVec3::new(x + 1, h2 - 2, z), Some([0.75; 3]));
-                space.set(IVec3::new(x, h2 - 2, z - 1), Some([0.75; 3]));
-                space.set(IVec3::new(x, h2 - 2, z + 1), Some([0.75; 3]));
-                space.set(IVec3::new(x - 1, h2 - 1, z), Some([0.75; 3]));
-                space.set(IVec3::new(x + 1, h2 - 1, z), Some([0.75; 3]));
-                space.set(IVec3::new(x, h2 - 1, z - 1), Some([0.75; 3]));
-                space.set(IVec3::new(x, h2 - 1, z + 1), Some([0.75; 3]));
-            }
-            if h > 98 {
-                space.set(IVec3::new(x, 98, z), Some([1.0, 0.5, 0.3]));
-            }
-            // space.set(IVec3::new(x, 255, z), Some([1.0; 3]));
-        }
-    }
-    for i in -2..=24 {
-        for j in -2..=24 {
-            space.set(IVec3::new(i + 100, 103, j + 100), Some([1.0, 0.1, 0.1]));
-            space.set(IVec3::new(i + 100, 103, j + 100), Some([1.0, 0.1, 0.1]));
-            space.set(IVec3::new(i + 100, 103, j + 100), Some([1.0, 0.1, 0.1]));
-        }
-    }
-    // space.set(IVec3::new(113, 106, 113), Cell::Empty([0; 2]));
-    // space.set(IVec3::new(112, 106, 113), Cell::Empty([0; 2]));
-    // space.set(IVec3::new(112, 106, 112), Cell::Empty([0; 2]));
-    // space.set(IVec3::new(113, 106, 112), Cell::Empty([0; 2]));
-    space.set(IVec3::new(113, 102, 113), Some([1.0; 3]));
-    space.set(IVec3::new(112, 102, 113), Some([1.0; 3]));
-    space.set(IVec3::new(112, 102, 112), Some([1.0; 3]));
-    space.set(IVec3::new(113, 102, 112), Some([1.0; 3]));
-    space.set(IVec3::new(110, 90, 110), Some([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(111, 90, 110), Some([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(111, 90, 109), Some([0.3, 0.5, 1.0]));
-    space.set(IVec3::new(110, 90, 109), Some([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(111, 90, 108), Some([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(110, 90, 108), Some([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(112, 90, 110), Some([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(112, 90, 109), Some([1.0, 0.5, 0.3]));
-    space.set(IVec3::new(112, 90, 108), Some([1.0, 0.5, 0.3]));
-    // space.calculate_distances();
-
-    // println!("making svo");
-    // let t = Instant::now();
-    // let mut svo_space = SvoSpace::new(space.size);
-    // for x in 0..space.size.x {
-    //     for y in 0..space.size.y {
-    //         for z in 0..space.size.z {
-    //             let p = IVec3::new(x, y, z);
-    //             let v = match space.get(p) {
-    //                 Some(Cell::Solid(v)) => Some(v),
-    //                 Some(Cell::Empty(_)) => None,
-    //                 None => None,
-    //             };
-    //             svo_space.set(p, v);
-    //         }
-    //     }
-    // }
-    // println!("checking svo {:.3?}", t.elapsed());
-    // let t = Instant::now();
-    // for x in 0..space.size.x {
-    //     for y in 0..space.size.y {
-    //         for z in 0..space.size.z {
-    //             let p = IVec3::new(x, y, z);
-    //             let v = match space.get(p) {
-    //                 Some(Cell::Solid(v)) => Some(v),
-    //                 Some(Cell::Empty(_)) => None,
-    //                 None => None,
-    //             };
-    //             assert_eq!(v, svo_space.get(p));
-    //         }
-    //     }
-    // }
-    // println!("all g {:.2?}", t.elapsed());
-
-    // println!("array size: {}", space.mem_usage());
-    // println!("  svo size: {}", svo_space.mem_usage());
+    let space = worldgen::generate();
 
     let mut app = App {
         window: None,
         gpu: None,
 
-        yaw: -5.770068,
-        pitch: -0.13000016,
-        camera: Vec3::new(38.89386, 100.9141, 75.09488),
+        yaw: -5.3800497,
+        pitch: 0.21999985,
+        camera: Vec3::new(800.2352, 1511.8693, 654.40125),
         sun: Vec3::new(0.8, 10.2743, 3.7).normalize(),
         grabbed: false,
         left: false,
@@ -476,6 +391,7 @@ fn main() {
         backward: false,
         up: false,
         down: false,
+        fast: false,
 
         last_time: Instant::now(),
         times: [Duration::ZERO; 250],
@@ -576,123 +492,6 @@ impl WgpuState {
             }
         }
     }
-}
-
-struct Space {
-    size: IVec3,
-    voxels: Vec<Cell>,
-}
-
-impl Space {
-    fn new(size: IVec3) -> Self {
-        Space {
-            size,
-            voxels: vec![Cell::Empty([u32::MAX; 2]); (size.x * size.y * size.z) as usize],
-        }
-    }
-
-    fn mem_usage(&self) -> usize {
-        self.voxels.capacity() * std::mem::size_of::<Cell>()
-    }
-
-    fn idx(&self, p: IVec3) -> Option<usize> {
-        if p.cmplt(IVec3::ZERO).any() || p.cmpge(self.size).any() {
-            None
-        } else {
-            Some(((p.x * self.size.y + p.y) * self.size.z + p.z) as usize)
-        }
-    }
-
-    fn get(&self, p: IVec3) -> Option<Cell> {
-        Some(self.voxels[self.idx(p)?])
-    }
-
-    fn set(&mut self, p: IVec3, v: Cell) {
-        let i = self.idx(p).unwrap();
-        self.voxels[i] = v;
-    }
-
-    fn calculate_distances(&mut self) {
-        let mut decreases_up = VecDeque::new();
-        let mut decreases_down = VecDeque::new();
-
-        for x in 0..self.size.x {
-            for y in 0..self.size.y {
-                for z in 0..self.size.z {
-                    let p = IVec3::new(x, y, z);
-                    match self.get(p).unwrap() {
-                        Cell::Solid(_) => {
-                            decreases_up.push_back((p, 0));
-                            decreases_down.push_back((p, 0));
-                        }
-                        Cell::Empty(_) => {
-                            self.set(p, Cell::Empty([(self.size.y - y) as u32, y as u32 + 1]))
-                        }
-                    }
-                }
-            }
-        }
-
-        while let Some((p, v)) = decreases_up.pop_front() {
-            let propogate;
-            match self.get(p).unwrap() {
-                Cell::Solid(_) => {
-                    propogate = v == 0;
-                }
-                Cell::Empty([up, down]) => {
-                    propogate = v < up;
-                    if propogate {
-                        self.set(p, Cell::Empty([v, down]));
-                    }
-                }
-            }
-            if propogate {
-                for x in p.x - 1..=p.x + 1 {
-                    for y in p.y - 1..=p.y {
-                        for z in p.z - 1..=p.z + 1 {
-                            let p = IVec3::new(x, y, z);
-                            if matches!(self.get(p), Some(Cell::Empty([up, _])) if up > v + 1) {
-                                decreases_up.push_back((p, v + 1));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        while let Some((p, v)) = decreases_down.pop_front() {
-            let propogate;
-            match self.get(p).unwrap() {
-                Cell::Solid(_) => {
-                    propogate = v == 0;
-                }
-                Cell::Empty([up, down]) => {
-                    propogate = v < down;
-                    if propogate {
-                        self.set(p, Cell::Empty([up, v]));
-                    }
-                }
-            }
-            if propogate {
-                for x in p.x - 1..=p.x + 1 {
-                    for y in p.y..=p.y + 1 {
-                        for z in p.z - 1..=p.z + 1 {
-                            let p = IVec3::new(x, y, z);
-                            if matches!(self.get(p), Some(Cell::Empty([_, down])) if down > v + 1) {
-                                decreases_down.push_back((p, v + 1));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Cell {
-    Solid([f32; 3]),
-    Empty([u32; 2]),
 }
 
 struct ShowPipeline {

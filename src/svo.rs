@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+use ahash::AHashMap;
 use glam::IVec3;
 use ordered_float::OrderedFloat;
 use slotmap::{new_key_type, SlotMap};
@@ -9,11 +8,9 @@ new_key_type! {
 }
 
 pub struct SvoSpace {
-    hash: HashMap<SvoCell, Node>,
+    hash: AHashMap<SvoCell, Node>,
     cells: SlotMap<Node, RcSvoCell>,
     root: Option<Node>,
-    pub size: IVec3,
-    pub height: u32,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -25,36 +22,47 @@ pub enum SvoCell {
 struct RcSvoCell {
     refcount: usize,
     cell: SvoCell,
+    level: usize,
 }
 
 impl SvoSpace {
-    pub fn new(size: IVec3) -> Self {
-        let height = (size.max_element() as u32).next_power_of_two().ilog2();
+    pub fn new() -> Self {
         SvoSpace {
-            hash: HashMap::new(),
+            hash: AHashMap::new(),
             cells: SlotMap::default(),
             root: None,
-            size,
-            height,
         }
     }
 
-    fn create_node(&mut self, cell: SvoCell) -> Option<Node> {
+    pub fn set_root(&mut self, node: Option<Node>) {
+        if let Some(node) = node {
+            self.cells[node].refcount += 1;
+        }
+        if let Some(node) = self.root {
+            self.decr(node);
+        }
+        self.root = node;
+    }
+
+    pub fn create_node(&mut self, cell: SvoCell) -> Option<Node> {
         if matches!(cell, SvoCell::Children(a) if a == [None; 8]) {
             return None;
         }
         let cells = &mut self.cells;
         Some(*self.hash.entry(cell).or_insert_with_key(|cell| {
+            let mut level = 0;
             if let SvoCell::Children(children) = cell {
                 for &child in children {
                     if let Some(child) = child {
                         cells[child].refcount += 1;
+                        level = level.max(cells[child].level + 1);
                     }
                 }
             }
             cells.insert(RcSvoCell {
                 cell: cell.clone(),
                 refcount: 0,
+                level,
             })
         }))
     }
@@ -74,11 +82,8 @@ impl SvoSpace {
     }
 
     pub fn get(&self, mut p: IVec3) -> Option<[f32; 3]> {
-        if p.cmplt(IVec3::ZERO).any() || p.cmpge(self.size).any() {
-            return None;
-        }
         let mut node = self.root;
-        for level in (0..self.height).rev() {
+        for level in (0..self.height()).rev() {
             let children = self.cells[node?].cell.unwrap_children();
             let c = IVec3::splat(1 << level);
             let above = p.cmpge(c);
@@ -95,15 +100,11 @@ impl SvoSpace {
     }
 
     pub fn set(&mut self, mut p: IVec3, v: Option<[f32; 3]>) {
-        if p.cmplt(IVec3::ZERO).any() || p.cmpge(self.size).any() {
-            panic!("{p:?} is out of bounds {:?}", self.size);
-        }
-
         let v = v.map(|a| a.map(OrderedFloat));
 
         let mut stack = vec![];
         let mut node = self.root;
-        for level in (0..self.height).rev() {
+        for level in (0..self.height()).rev() {
             let c = IVec3::splat(1 << level);
             let above = p.cmpge(c);
             stack.push((node, above.bitmask()));
@@ -156,6 +157,10 @@ impl SvoSpace {
 
     pub fn root_node(&self) -> Option<Node> {
         self.root
+    }
+
+    pub fn height(&self) -> usize {
+        self.root.map_or(0, |n| self.cells[n].level)
     }
 
     pub fn mem_usage(&self) -> usize {

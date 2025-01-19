@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use winit::dpi::PhysicalSize;
 
 use crate::svo::{Node, SvoCell, SvoSpace};
-use crate::{Cell, ShowPipeline, Space, WgpuState};
+use crate::{ShowPipeline, WgpuState};
 
 pub struct SoftwareRaytracer {
     tex: wgpu::Texture,
@@ -152,10 +152,7 @@ pub struct RayHit {
 }
 
 pub(super) fn raycast(space: &SvoSpace, from: Vec3, d: Vec3) -> Option<RayHit> {
-    // let rr = raycast_recurse(space, from, d);
-    let ri = raycast_iter(space, from, d);
-    // assert_eq!(rr, ri);
-    ri
+    raycast_iter(space, from, d)
 }
 
 pub(super) fn raycast_iter(space: &SvoSpace, from: Vec3, d: Vec3) -> Option<RayHit> {
@@ -163,13 +160,13 @@ pub(super) fn raycast_iter(space: &SvoSpace, from: Vec3, d: Vec3) -> Option<RayH
     let d_sign = d.signum();
     let mirror_mask = flip.bitmask() as usize;
     let d = d.abs().max(Vec3::splat(f32::EPSILON));
-    let space_bound = IVec3::splat(1 << space.height);
+    let space_bound = IVec3::splat(1 << space.height());
     let from = Vec3::select(flip, space_bound.as_vec3() - from, from);
 
     let mut t = (-from / d).max_element().max(0.0);
     let mut enter_dir = BVec3::new(false, false, false);
 
-    let mut height = space.height as usize;
+    let mut height = space.height();
     let mut stack_node = [None; 32];
     let mut stack_t_midplanes = [Vec3::ZERO; 32];
     let mut stack_subvoxel = [BVec3::new(false, false, false); 32];
@@ -186,7 +183,7 @@ pub(super) fn raycast_iter(space: &SvoSpace, from: Vec3, d: Vec3) -> Option<RayH
     }
     height -= 1;
 
-    while height <= space.height as usize {
+    while height <= space.height() {
         if stack_node[height].is_none() {
             let subvoxel = stack_subvoxel[height + 1];
             let midplanes = IVec3::splat(1 << height);
@@ -258,114 +255,6 @@ pub(super) fn raycast_iter(space: &SvoSpace, from: Vec3, d: Vec3) -> Option<RayH
     }
 
     None
-}
-
-pub(super) fn raycast_recurse(space: &SvoSpace, from: Vec3, d: Vec3) -> Option<RayHit> {
-    let flip = d.cmplt(Vec3::ZERO);
-    let d_sign = d.signum();
-    let mirror_mask = flip.bitmask() as usize;
-    let d = d.abs().max(Vec3::splat(f32::EPSILON));
-    let space_bound = Vec3::splat((1 << space.height) as f32);
-    let from = Vec3::select(flip, space_bound - from, from);
-
-    let t_enter = -from / d;
-    let t_0 = t_enter.max_element().max(0.0);
-    let t_1 = ((space_bound - from) / d).min_element();
-
-    if t_0 > t_1 {
-        return None;
-    }
-
-    let start = from + d * t_0;
-
-    raycast_impl(
-        space,
-        space.root_node(),
-        mirror_mask,
-        d_sign,
-        space.height,
-        Vec3::ZERO,
-        start,
-        d,
-        t_0,
-        t_enter.cmpeq(Vec3::splat(t_0)),
-    )
-}
-
-fn raycast_impl(
-    space: &SvoSpace,
-    node: Option<Node>,
-    mirror_mask: usize,
-    d_sign: Vec3,
-    height: u32,
-    offset: Vec3,
-    ray_start: Vec3,
-    ray_d: Vec3,
-    mut ray_t: f32,
-    mut ray_enter: BVec3,
-) -> Option<RayHit> {
-    let node = node?;
-
-    if height == 0 {
-        let SvoCell::Block(color) = space.get_node(node) else {
-            unreachable!()
-        };
-        return Some(RayHit {
-            color: color.map(|c| c.0),
-            t: ray_t,
-            normal: -Vec3::select(ray_enter, d_sign, Vec3::ZERO),
-            hit: offset.as_ivec3(),
-        });
-    }
-
-    let mid_planes = Vec3::splat((1 << height - 1) as f32);
-    let t_mid_plane = (offset + mid_planes - ray_start) / ray_d;
-    let t_end = ((offset + mid_planes * 2.0 - ray_start) / ray_d).min_element();
-
-    let mut subvoxel = t_mid_plane.cmplt(Vec3::splat(ray_t));
-    let children = space.get_node(node).unwrap_children();
-
-    loop {
-        if let Some(hit) = raycast_impl(
-            space,
-            children[subvoxel.bitmask() as usize ^ mirror_mask],
-            mirror_mask,
-            d_sign,
-            height - 1,
-            offset + Vec3::select(subvoxel, mid_planes, Vec3::ZERO),
-            ray_start,
-            ray_d,
-            ray_t,
-            ray_enter,
-        ) {
-            return Some(hit);
-        }
-
-        if subvoxel.all() {
-            return None;
-        }
-
-        let min = Vec3::select(subvoxel, Vec3::splat(f32::INFINITY), t_mid_plane).min_element();
-        if min > t_end {
-            return None;
-        }
-
-        if min == t_mid_plane.x {
-            ray_t = t_mid_plane.x;
-            subvoxel.x = true;
-            ray_enter = BVec3::new(true, false, false);
-        }
-        if min == t_mid_plane.y {
-            ray_t = t_mid_plane.y;
-            subvoxel.y = true;
-            ray_enter = BVec3::new(false, true, false);
-        }
-        if min == t_mid_plane.z {
-            ray_t = t_mid_plane.z;
-            subvoxel.z = true;
-            ray_enter = BVec3::new(false, false, true);
-        }
-    }
 }
 
 fn raytrace(space: &SvoSpace, from: Vec3, d: Vec3, sun: Vec3, depth_limit: usize) -> [f32; 3] {
