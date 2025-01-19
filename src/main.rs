@@ -109,18 +109,17 @@ impl App {
             self.sun,
         );
 
-        if self.headless && renderer.samples % 1_00 == 0 {
-            self.seq = 6;
+        if self.headless && renderer.samples % 1_000 == 0 {
             renderer.save_image(gpu, format!("frames/{:04}-{:03}.exr", self.iter, self.seq));
 
-            // let (axis, angle) = Quat::from_rotation_arc(
-            //     Vec3::new(0.8, 1.0, 3.7).normalize(),
-            //     Vec3::new(0.8, 0.0, 3.7).normalize(),
-            // )
-            // .to_axis_angle();
-            // let quat = Quat::from_axis_angle(axis, 0.01 * angle.signum());
-            // self.seq += 1;
-            // self.sun = quat * self.sun;
+            let (axis, angle) = Quat::from_rotation_arc(
+                Vec3::new(0.8, 1.0, 3.7).normalize(),
+                Vec3::new(0.8, 0.0, 3.7).normalize(),
+            )
+            .to_axis_angle();
+            let quat = Quat::from_axis_angle(axis, 0.0025 * angle.signum());
+            self.seq += 1;
+            self.sun = quat * self.sun;
 
             let now = Instant::now();
             println!(
@@ -130,10 +129,6 @@ impl App {
                 self.seq,
             );
             self.frame_start = now;
-
-            if renderer.samples == 10_000 {
-                std::process::exit(0);
-            }
 
             if self.sun.y < -0.3 {
                 self.iter += 1;
